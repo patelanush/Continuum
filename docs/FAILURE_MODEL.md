@@ -1,52 +1,40 @@
-# Failure Model through Phase 2
+# Failure Model through Phase 3
 
-The runtime uses at-least-once Kafka delivery, durable PostgreSQL state, a transactional outbox,
-and an idempotent consumer inbox. It does not provide exactly-once distributed execution.
+Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a transactional outbox, an idempotent inbox, and durable leased execution attempts. It does **not** promise exactly-once distributed or arbitrary external execution.
 
-## Addressed now
+## Addressed
 
-- **Database commit before broker availability:** The workflow state, audit rows, and outbox row
-  commit together. If Kafka is unavailable, the row remains unpublished and the dispatcher
-  retries. A physical single-broker stop/restart was exercised locally.
-- **Dispatcher ack then crash:** The event may be published again because `published_at` was not
-  committed. It keeps the same `event_id`; the inbox deduplicates it. This boundary is modeled by
-  republishing the same envelope, not by physically crashing a dispatcher at that instant.
-- **Duplicate delivery or missing Kafka offset commit:** A worker may commit database state then
-  fail before offset commit. Redelivery uses `INSERT ... ON CONFLICT DO NOTHING` on
-  `(consumer_group,event_id)`; the business operation is not repeated. Integration tests omit the
-  first offset commit and redeliver the same event ID through real Kafka.
-- **Stale event:** A cancelled or already-advanced workflow wins over the Kafka record. The event
-  is recorded as consumed and causes no new state transition or downstream work.
-- **Malformed or unsupported envelope:** Validation failures and messages inconsistent with their
-  durable outbox row go to the dead-letter topic. The source offset is committed only after an
-  acknowledged DLQ publish. If DLQ publication fails, the source remains eligible for retry.
-- **Distributed duplicate race:** A unique inbox index and workflow row locks coordinate workers
-  across processes. Tests race independent PostgreSQL sessions.
-- **Database failure before commit:** Inbox, workflow state, audit, and downstream outbox changes
-  all roll back. The Kafka offset remains uncommitted.
-- **Broker container restart:** The local named Kafka volume retains topic data; application
-  state remains in PostgreSQL. This is a single-broker restart test, not high availability.
+- **Database commits while Kafka is unavailable:** State/audit/outbox commit together. An unpublished row survives the outage; the dispatcher retries the same stable event ID. A local broker stop/restart was exercised in Phase 2.
+- **Dispatcher publishes before marking the row:** Publication can repeat. The same `event_id` and inbox uniqueness make the replay harmless for scheduling.
+- **Consumer commits DB but loses Kafka offset acknowledgement:** Replayed event does not create another attempt; offset can be committed after dedupe. Real Kafka integration coverage deliberately omits a first offset commit.
+- **Stale or malformed Kafka event:** PostgreSQL truth wins. Stale events become no-ops; invalid envelopes or unmatched durable outbox events go to the DLQ before source-offset commit.
+- **Executor dies before or during work:** Heartbeats stop, the database-time lease expires, the scheduler marks the attempt EXPIRED, and a safe replacement can be claimed. A real container SIGKILL demo covers pure work.
+- **Executor dies after a keyed external side effect:** The mock payment is committed independently, the executor is SIGKILLed before Continuum finalizes, and a replacement retries with the same per-step idempotency key. The mock returns the original refund. A real container-crash demo verifies one refund and a successful replacement.
+- **External response lost after a durable side effect:** The delayed-response mock makes this window deterministic. A PostgreSQL/HTTP integration test separately simulates a lost finalization result without physically killing a process.
+- **Stale executor wakes after lease replacement:** UUID token and expiry validation reject finalization/heartbeat; the old owner cannot overwrite a newer result.
+- **Concurrent executors/recovery schedulers:** PostgreSQL locks, `SKIP LOCKED`, and unique attempt indexes prevent duplicate claims or replacement generations. Tests use independent concurrent sessions.
+- **Healthy long work:** A heartbeat extends an unexpired lease; tests run longer than the initial lease and observe one attempt.
+- **Transaction rollback:** Inbox + initial scheduling and attempt finalization + step/audit/outbox roll back as units. No Kafka offset is committed before initial scheduling commits.
 
-## Failure sequences
+## Boundary table
 
-| Boundary | Durable result | Recovery |
+| Failure boundary | Durable outcome | Next action |
 | --- | --- | --- |
-| DB transaction fails | No inbox, state, audit, or new outbox commit | Kafka redelivery retries |
-| DB commits; offset commit fails | State and inbox exist | Redelivery is deduplicated, then offset can commit |
-| Outbox send fails | Outbox stays unpublished with attempt/error | Dispatcher retries |
-| Kafka ack succeeds; dispatcher dies before DB mark | Same outbox row remains unpublished | Republish same event ID; inbox deduplicates |
-| Event is stale | No workflow mutation | Inbox records handled stale event; offset commits |
-| DLQ send fails | No source offset commit | Worker retries the message/DLQ send |
+| Consumer DB transaction fails | No inbox/attempt commit | Kafka redelivery |
+| Consumer DB commits, offset commit fails | Inbox and pending attempt exist | Redelivery dedupes |
+| Executor dies after claim, before external call | RUNNING attempt until lease expiry | Scheduler creates safe replacement |
+| External keyed refund commits, response is lost | Refund exists; attempt remains RUNNING | Expiry, retry same key, receive original refund |
+| Heartbeat loses lease | Old attempt can no longer renew/finalize | Stop old tool if possible; scheduler/new owner proceeds |
+| Finalization transaction fails | Attempt/step/audit/outbox remain pre-finalization | Lease expiry and safe retry |
+| Two schedulers see one expired lease | One wins workflow/attempt locks | One replacement only |
+| Cancellation races with in-flight HTTP | Finalization is fenced, but external action may still occur | Tool-specific reconciliation is future work |
 
-## Still deferred
+## Deferred and limitations
 
-Phase 2 `noop` steps finish inside one short database transaction. This does not solve a worker
-dying during a long-running tool call, uncertain external side effects, model/tool timeouts,
-retry scheduling, tool reconciliation, or sandbox crashes. Worker leases and heartbeats, human
-approval, Redis coordination, full fault injection, and multi-broker disaster recovery are not
-implemented. A future tool executor must define idempotency keys and reconciliation for effects
-that succeed externally while their acknowledgement is lost.
-
-PostgreSQL interruption during commit can still leave a caller uncertain whether the transaction
-succeeded. Durable state can be reread; an automated reconciliation policy remains future work.
-The local dead-letter topic has no replay UI or retention policy yet.
+- Truly non-idempotent APIs without a reliable key or reconciliation mechanism are **not** automatically retried. An unknown tool type cannot acquire a safe crash-retry guarantee merely by being configured as a workflow step.
+- `mock_refund` is an independent local demonstrator, not a real payment integration. Its idempotency-key storage has no production retention/expiry policy. Test-only delay controls must remain local.
+- A transient payment/DB outage can lead to lease expiry and repeated **safe** calls. Max attempts are bounded, but there is no general retry/backoff policy, circuit breaker, or tool-specific reconciliation yet.
+- Cancellation fences durable finalization but cannot guarantee that an already-sent external HTTP request was cancelled before its effect. Human approval and compensating actions remain future work.
+- Kafka is one local KRaft broker with a named volume, not broker HA or disaster recovery. Multi-region recovery is not implemented.
+- LLM/model failures, arbitrary tool timeouts, code sandbox crashes, human approval, Redis coordination, OpenTelemetry, Kubernetes, and a full FaultLab campaign remain planned.
+- A database interruption around a commit can leave a caller uncertain whether that commit succeeded. Durable rereads and idempotent commands/keys limit harm; comprehensive reconciliation and large-scale fault testing are Phase 4+ work.

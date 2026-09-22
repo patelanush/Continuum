@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from durable_agent_runtime.db.models import ConsumedEvent, OutboxEvent
 from durable_agent_runtime.events import StepReadyEvent
-from durable_agent_runtime.services.workflows import WorkflowService
+from durable_agent_runtime.services.execution import ExecutionService
 
 
 class PermanentEventError(Exception):
@@ -46,7 +46,4 @@ async def process_step_ready(
         inserted = await session.scalar(statement)
         if inserted is None:
             return "duplicate"
-        service = WorkflowService(session)
-        return await service.execute_ready_step_in_transaction(
-            event.step_id, causation_id=event.event_id
-        )
+        return await ExecutionService(session).schedule_initial_attempt(event.step_id)

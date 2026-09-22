@@ -16,6 +16,39 @@ services:
       timeout: 3s
       retries: 20
 
+  payments-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+      POSTGRES_DB: payments
+    ports:
+      - "${PAYMENTS_POSTGRES_PORT:-55434}:5432"
+    volumes:
+      - payments_data:/var/lib/postgresql/data
+      - ./docker/payments/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  mock-payments:
+    build: .
+    command: ["uvicorn", "durable_agent_runtime.mock_payments.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      PAYMENTS_DATABASE_URL: postgresql://payments:payments@payments-postgres:5432/payments
+    ports:
+      - "${MOCK_PAYMENTS_PORT:-8001}:8001"
+    depends_on:
+      payments-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   api:
     build: .
     environment:
@@ -23,7 +56,7 @@ services:
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,9 +74,10 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:19092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:${KAFKA_PORT:-19092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -102,6 +136,38 @@ services:
       api:
         condition: service_healthy
 
+  executor:
+    build: .
+    command: ["python", "-m", "durable_agent_runtime.execution.executor"]
+    restart: unless-stopped
+    stop_grace_period: 65s
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
+      MOCK_PAYMENTS_URL: http://mock-payments:8001
+      EXECUTOR_LEASE_SECONDS: ${EXECUTOR_LEASE_SECONDS:-20}
+      EXECUTOR_HEARTBEAT_SECONDS: ${EXECUTOR_HEARTBEAT_SECONDS:-4}
+    depends_on:
+      api:
+        condition: service_healthy
+      mock-payments:
+        condition: service_healthy
+
+  recovery-scheduler:
+    build: .
+    command: ["python", "-m", "durable_agent_runtime.execution.recovery"]
+    restart: unless-stopped
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
+      RECOVERY_SCAN_INTERVAL_SECONDS: ${RECOVERY_SCAN_INTERVAL_SECONDS:-1}
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   kafka_data:
+  payments_data:

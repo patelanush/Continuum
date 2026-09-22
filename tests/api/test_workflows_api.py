@@ -3,6 +3,12 @@ from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from durable_agent_runtime.db.models import OutboxEvent
+from durable_agent_runtime.events import StepReadyEvent
+from durable_agent_runtime.worker.processor import process_step_ready
+from tests.conftest import TestSession
 
 
 @pytest.mark.integration
@@ -67,6 +73,30 @@ async def test_unknown_workflow_returns_consistent_404(client: AsyncClient) -> N
     response = await client.get(f"/api/v1/workflows/{uuid4()}")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
+    attempts = await client.get(f"/api/v1/workflows/{uuid4()}/attempts")
+    assert attempts.status_code == 404
+
+
+@pytest.mark.integration
+async def test_attempts_endpoint_is_read_only_diagnostic(
+    client: AsyncClient, workflow_payload: dict[str, object]
+) -> None:
+    workflow_id = (await client.post("/api/v1/workflows", json=workflow_payload)).json()["id"]
+    assert (await client.get(f"/api/v1/workflows/{workflow_id}/attempts")).json() == []
+    await client.post(f"/api/v1/workflows/{workflow_id}/start")
+    async with TestSession() as session:
+        row = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.workflow_id == workflow_id)
+        )
+        assert row is not None
+        event = StepReadyEvent.from_outbox(row)
+    async with TestSession() as session:
+        await process_step_ready(session, event, consumer_group="api-test", worker_id="test-worker")
+    response = await client.get(f"/api/v1/workflows/{workflow_id}/attempts")
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["status"] == "PENDING"
+    assert response.json()[0]["attempt_number"] == 1
 
 
 @pytest.mark.integration

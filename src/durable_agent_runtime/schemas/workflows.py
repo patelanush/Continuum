@@ -4,7 +4,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from durable_agent_runtime.domain.enums import EntityType, StepStatus, WorkflowStatus
+from durable_agent_runtime.domain.enums import (
+    EntityType,
+    ExecutionAttemptStatus,
+    StepStatus,
+    WorkflowStatus,
+)
 
 
 class StepCreate(BaseModel):
@@ -95,3 +100,23 @@ class TransitionResponse(BaseModel):
     reason: str | None
     details: dict[str, Any] | None
     created_at: datetime
+
+
+class AttemptResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workflow_id: UUID
+    step_id: UUID
+    attempt_number: int
+    status: ExecutionAttemptStatus
+    executor_id: str | None
+    lease_expires_at: datetime | None
+    last_heartbeat_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    output: dict[str, Any] | None
+    error_code: str | None
+    error_detail: str | None
+    created_at: datetime
+    updated_at: datetime

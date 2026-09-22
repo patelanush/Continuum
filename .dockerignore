@@ -10,4 +10,5 @@ coverage.xml
 htmlcov
 tests
 docs
+scripts
 .env

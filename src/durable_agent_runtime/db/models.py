@@ -21,11 +21,19 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from durable_agent_runtime.db.base import Base
-from durable_agent_runtime.domain.enums import EntityType, StepStatus, WorkflowStatus
+from durable_agent_runtime.domain.enums import (
+    EntityType,
+    ExecutionAttemptStatus,
+    StepStatus,
+    WorkflowStatus,
+)
 
 
 def enum_values(
-    enum_class: type[WorkflowStatus] | type[StepStatus] | type[EntityType],
+    enum_class: type[WorkflowStatus]
+    | type[StepStatus]
+    | type[EntityType]
+    | type[ExecutionAttemptStatus],
 ) -> list[str]:
     return [item.value for item in enum_class]
 
@@ -224,4 +232,70 @@ class ConsumedEvent(Base):
     __table_args__ = (
         Index("uq_consumed_events_group_event", consumer_group, event_id, unique=True),
         Index("ix_consumed_events_workflow_id", workflow_id),
+    )
+
+
+class ExecutionAttempt(TimestampMixin, Base):
+    __tablename__ = "execution_attempts"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workflow_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False
+    )
+    step_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=False
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[ExecutionAttemptStatus] = mapped_column(
+        Enum(
+            ExecutionAttemptStatus,
+            name="execution_attempt_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+        default=ExecutionAttemptStatus.PENDING,
+    )
+    executor_id: Mapped[str | None] = mapped_column(String(200))
+    lease_token: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_eligible_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("attempt_number >= 1", name="attempt_number_positive"),
+        CheckConstraint(
+            "status <> 'RUNNING' OR (executor_id IS NOT NULL AND lease_token IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL)",
+            name="running_attempt_has_lease",
+        ),
+        Index("uq_execution_attempts_step_number", step_id, attempt_number, unique=True),
+        Index(
+            "uq_execution_attempts_one_active",
+            step_id,
+            unique=True,
+            postgresql_where=status.in_(
+                [ExecutionAttemptStatus.PENDING, ExecutionAttemptStatus.RUNNING]
+            ),
+        ),
+        Index(
+            "ix_execution_attempts_pending",
+            next_eligible_at,
+            "created_at",
+            id,
+            postgresql_where=status == ExecutionAttemptStatus.PENDING,
+        ),
+        Index(
+            "ix_execution_attempts_expiring",
+            lease_expires_at,
+            id,
+            postgresql_where=status == ExecutionAttemptStatus.RUNNING,
+        ),
+        Index("ix_execution_attempts_workflow_id", workflow_id),
     )

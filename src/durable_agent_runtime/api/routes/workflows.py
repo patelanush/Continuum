@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Query, status
 from durable_agent_runtime.api.dependencies import DatabaseSession
 from durable_agent_runtime.domain.enums import WorkflowStatus
 from durable_agent_runtime.schemas.workflows import (
+    AttemptResponse,
     CancelRequest,
     TransitionResponse,
     WorkflowCreate,
@@ -59,3 +60,8 @@ async def cancel_workflow(
 @router.get("/{workflow_id}/history", response_model=list[TransitionResponse])
 async def workflow_history(workflow_id: UUID, session: DatabaseSession) -> object:
     return await WorkflowService(session).get_workflow_history(workflow_id)
+
+
+@router.get("/{workflow_id}/attempts", response_model=list[AttemptResponse])
+async def workflow_attempts(workflow_id: UUID, session: DatabaseSession) -> object:
+    return await WorkflowService(session).get_execution_attempts(workflow_id)

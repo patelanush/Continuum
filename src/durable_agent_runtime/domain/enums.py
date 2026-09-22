@@ -21,3 +21,12 @@ class StepStatus(StrEnum):
 class EntityType(StrEnum):
     WORKFLOW = "workflow"
     STEP = "step"
+
+
+class ExecutionAttemptStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"

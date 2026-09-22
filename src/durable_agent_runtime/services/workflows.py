@@ -6,8 +6,19 @@ from uuid import UUID
 from sqlalchemy import func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from durable_agent_runtime.db.models import OutboxEvent, StateTransition, Workflow, WorkflowStep
-from durable_agent_runtime.domain.enums import EntityType, StepStatus, WorkflowStatus
+from durable_agent_runtime.db.models import (
+    ExecutionAttempt,
+    OutboxEvent,
+    StateTransition,
+    Workflow,
+    WorkflowStep,
+)
+from durable_agent_runtime.domain.enums import (
+    EntityType,
+    ExecutionAttemptStatus,
+    StepStatus,
+    WorkflowStatus,
+)
 from durable_agent_runtime.domain.errors import (
     InvariantViolation,
     StepNotFound,
@@ -15,6 +26,7 @@ from durable_agent_runtime.domain.errors import (
     WorkflowNotFound,
 )
 from durable_agent_runtime.domain.state_machine import (
+    validate_attempt_transition,
     validate_step_transition,
     validate_workflow_transition,
 )
@@ -176,26 +188,6 @@ class WorkflowService:
             workflow.completed_at = datetime.now(UTC)
         return workflow
 
-    async def execute_ready_step_in_transaction(self, step_id: UUID, *, causation_id: UUID) -> str:
-        """Apply one broker command without committing the caller's inbox transaction."""
-        workflow, _steps, step = await self._lock_by_step(step_id)
-        if (
-            workflow.status != WorkflowStatus.RUNNING
-            or workflow.current_step_position != step.position
-            or step.status != StepStatus.READY
-        ):
-            return "stale"
-        await self.mark_step_running_in_transaction(step_id)
-        if step.step_type == "noop":
-            await self.complete_step_in_transaction(step_id, causation_id=causation_id)
-            return "processed"
-        await self.fail_step_in_transaction(
-            step_id,
-            error_code="UNSUPPORTED_STEP_TYPE",
-            error_detail=f"No Phase 2 executor for step type {step.step_type}",
-        )
-        return "unsupported_step"
-
     async def fail_step(
         self, step_id: UUID, *, error_code: str, error_detail: str, reason: str | None = None
     ) -> Workflow:
@@ -238,6 +230,21 @@ class WorkflowService:
                 if step.status not in TERMINAL_STEP_STATUSES:
                     self._transition_step(step, StepStatus.CANCELLED, reason=reason)
                     step.completed_at = datetime.now(UTC)
+            attempts = await self.session.scalars(
+                select(ExecutionAttempt)
+                .where(
+                    ExecutionAttempt.workflow_id == workflow_id,
+                    ExecutionAttempt.status.in_(
+                        [ExecutionAttemptStatus.PENDING, ExecutionAttemptStatus.RUNNING]
+                    ),
+                )
+                .order_by(ExecutionAttempt.id)
+                .with_for_update()
+            )
+            for attempt in attempts:
+                validate_attempt_transition(attempt.status, ExecutionAttemptStatus.CANCELLED)
+                attempt.status = ExecutionAttemptStatus.CANCELLED
+                attempt.completed_at = datetime.now(UTC)
         logger.info("workflow_cancelled workflow_id=%s", workflow_id)
         return workflow
 
@@ -249,6 +256,15 @@ class WorkflowService:
             .order_by(StateTransition.created_at, StateTransition.id)
         )
         return list(transitions)
+
+    async def get_execution_attempts(self, workflow_id: UUID) -> list[ExecutionAttempt]:
+        await self.get_workflow(workflow_id)
+        rows = await self.session.scalars(
+            select(ExecutionAttempt)
+            .where(ExecutionAttempt.workflow_id == workflow_id)
+            .order_by(ExecutionAttempt.created_at, ExecutionAttempt.attempt_number)
+        )
+        return list(rows)
 
     async def _lock_workflow(self, workflow_id: UUID) -> tuple[Workflow, list[WorkflowStep]]:
         workflow = await self.session.scalar(

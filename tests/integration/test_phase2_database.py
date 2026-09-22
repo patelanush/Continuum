@@ -4,10 +4,16 @@ from uuid import UUID
 import pytest
 from sqlalchemy import func, select
 
-from durable_agent_runtime.db.models import ConsumedEvent, OutboxEvent, StateTransition
+from durable_agent_runtime.db.models import (
+    ConsumedEvent,
+    ExecutionAttempt,
+    OutboxEvent,
+    StateTransition,
+)
 from durable_agent_runtime.domain.enums import StepStatus, WorkflowStatus
 from durable_agent_runtime.events import StepReadyEvent
 from durable_agent_runtime.schemas.workflows import WorkflowCreate
+from durable_agent_runtime.services.execution import ExecutionService
 from durable_agent_runtime.services.workflows import WorkflowService
 from durable_agent_runtime.worker.processor import process_step_ready
 from tests.conftest import TestSession
@@ -126,7 +132,7 @@ async def test_inbox_dedupe_and_lost_offset_ack_simulation() -> None:
             await process_step_ready(
                 session, event, consumer_group="test-workers", worker_id="worker-a"
             )
-            == "processed"
+            == "scheduled"
         )
     # The database committed, but this test deliberately does not commit any Kafka offset.
     # A second delivery of the same event_id must be a durable no-op.
@@ -139,11 +145,12 @@ async def test_inbox_dedupe_and_lost_offset_ack_simulation() -> None:
             == "duplicate"
         )
     assert await history_count(workflow_id) == before_history
-    assert await outbox_count(workflow_id) == 2
+    assert await outbox_count(workflow_id) == 1
     async with TestSession() as session:
         workflow = await WorkflowService(session).get_workflow(workflow_id)
-        assert workflow.current_step_position == 1
-        assert workflow.steps[0].status == StepStatus.SUCCEEDED
+        assert workflow.current_step_position == 0
+        assert workflow.steps[0].status == StepStatus.READY
+        assert await session.scalar(select(func.count()).select_from(ExecutionAttempt)) == 1
         inbox = list(
             await session.scalars(
                 select(ConsumedEvent).where(ConsumedEvent.event_id == event.event_id)
@@ -168,19 +175,17 @@ async def test_stale_distinct_event_is_recorded_without_mutation() -> None:
     assert await outbox_count(workflow_id) == 1
 
 
-async def test_consumer_failure_rolls_back_inbox_state_audit_and_next_outbox(
+async def test_consumer_failure_rolls_back_inbox_and_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow_id, event = await create_started()
-    original = WorkflowService.execute_ready_step_in_transaction
+    original = ExecutionService.schedule_initial_attempt
 
-    async def fail_after_execution(
-        self: WorkflowService, step_id: UUID, *, causation_id: UUID
-    ) -> str:
-        await original(self, step_id, causation_id=causation_id)
-        raise RuntimeError("injected after downstream outbox insertion")
+    async def fail_after_execution(self: ExecutionService, step_id: UUID) -> str:
+        await original(self, step_id)
+        raise RuntimeError("injected after attempt insertion")
 
-    monkeypatch.setattr(WorkflowService, "execute_ready_step_in_transaction", fail_after_execution)
+    monkeypatch.setattr(ExecutionService, "schedule_initial_attempt", fail_after_execution)
     async with TestSession() as session:
         with pytest.raises(RuntimeError, match="injected"):
             await process_step_ready(
@@ -188,6 +193,7 @@ async def test_consumer_failure_rolls_back_inbox_state_audit_and_next_outbox(
             )
     async with TestSession() as session:
         assert await session.scalar(select(func.count()).select_from(ConsumedEvent)) == 0
+        assert await session.scalar(select(func.count()).select_from(ExecutionAttempt)) == 0
         workflow = await WorkflowService(session).get_workflow(workflow_id)
         assert workflow.steps[0].status == StepStatus.READY
         assert workflow.steps[1].status == StepStatus.PENDING
@@ -205,11 +211,13 @@ async def test_concurrent_duplicate_consumers_insert_once() -> None:
             )
 
     results = await asyncio.gather(*(consume(f"worker-{index}") for index in range(4)))
-    assert sorted(results) == ["duplicate", "duplicate", "duplicate", "processed"]
-    assert await outbox_count(workflow_id) == 2
+    assert sorted(results) == ["duplicate", "duplicate", "duplicate", "scheduled"]
+    assert await outbox_count(workflow_id) == 1
+    async with TestSession() as session:
+        assert await session.scalar(select(func.count()).select_from(ExecutionAttempt)) == 1
 
 
-async def test_unsupported_step_type_fails_workflow_without_retry_loop() -> None:
+async def test_unsupported_step_type_is_durably_scheduled() -> None:
     command = WorkflowCreate.model_validate(
         {"workflow_type": "unsupported", "steps": [{"name": "tool", "step_type": "external"}]}
     )
@@ -229,11 +237,11 @@ async def test_unsupported_step_type_fails_workflow_without_retry_loop() -> None
             await process_step_ready(
                 session, event, consumer_group="test-workers", worker_id="worker-a"
             )
-            == "unsupported_step"
+            == "scheduled"
         )
     async with TestSession() as session:
-        failed = await WorkflowService(session).get_workflow(workflow_id)
-        assert failed.status == WorkflowStatus.FAILED
-        assert failed.steps[0].status == StepStatus.FAILED
-        assert failed.steps[0].error_code == "UNSUPPORTED_STEP_TYPE"
+        pending = await WorkflowService(session).get_workflow(workflow_id)
+        assert pending.status == WorkflowStatus.RUNNING
+        assert pending.steps[0].status == StepStatus.READY
+        assert await session.scalar(select(func.count()).select_from(ExecutionAttempt)) == 1
     assert await outbox_count(workflow_id) == 1

@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from enum import StrEnum
 
-from durable_agent_runtime.domain.enums import StepStatus, WorkflowStatus
+from durable_agent_runtime.domain.enums import ExecutionAttemptStatus, StepStatus, WorkflowStatus
 from durable_agent_runtime.domain.errors import InvalidStateTransition
 
 WORKFLOW_TRANSITIONS: Mapping[WorkflowStatus, frozenset[WorkflowStatus]] = {
@@ -23,6 +23,24 @@ STEP_TRANSITIONS: Mapping[StepStatus, frozenset[StepStatus]] = {
     StepStatus.CANCELLED: frozenset(),
 }
 
+ATTEMPT_TRANSITIONS: Mapping[ExecutionAttemptStatus, frozenset[ExecutionAttemptStatus]] = {
+    ExecutionAttemptStatus.PENDING: frozenset(
+        {ExecutionAttemptStatus.RUNNING, ExecutionAttemptStatus.CANCELLED}
+    ),
+    ExecutionAttemptStatus.RUNNING: frozenset(
+        {
+            ExecutionAttemptStatus.SUCCEEDED,
+            ExecutionAttemptStatus.FAILED,
+            ExecutionAttemptStatus.EXPIRED,
+            ExecutionAttemptStatus.CANCELLED,
+        }
+    ),
+    ExecutionAttemptStatus.SUCCEEDED: frozenset(),
+    ExecutionAttemptStatus.FAILED: frozenset(),
+    ExecutionAttemptStatus.EXPIRED: frozenset(),
+    ExecutionAttemptStatus.CANCELLED: frozenset(),
+}
+
 
 def _validate_transition[StatusT: StrEnum](
     entity: str, current: StatusT, target: StatusT, allowed: Mapping[StatusT, frozenset[StatusT]]
@@ -37,3 +55,9 @@ def validate_workflow_transition(current: WorkflowStatus, target: WorkflowStatus
 
 def validate_step_transition(current: StepStatus, target: StepStatus) -> None:
     _validate_transition("step", current, target, STEP_TRANSITIONS)
+
+
+def validate_attempt_transition(
+    current: ExecutionAttemptStatus, target: ExecutionAttemptStatus
+) -> None:
+    _validate_transition("execution attempt", current, target, ATTEMPT_TRANSITIONS)

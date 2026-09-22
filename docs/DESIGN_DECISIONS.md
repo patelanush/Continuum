@@ -1,4 +1,4 @@
-# Design Decisions through Phase 2
+# Design Decisions through Phase 3
 
 ## PostgreSQL is the source of truth
 
@@ -114,6 +114,11 @@ event-driven distributed architecture this phase is designed to prove.
 **Tradeoff:** This local topology survives a container restart but has no broker high availability
 or disaster recovery guarantee.
 
+The Apache image's default log directory is `/tmp/kafka-logs`; merely mounting a volume at
+`/var/lib/kafka/data` did not persist broker logs across container replacement. Phase 3 explicitly
+sets `KAFKA_LOG_DIRS=/var/lib/kafka/data`. Existing local broker data was copied into the volume
+and a broker container replacement was validated. This is local persistence, not HA.
+
 ## Workflow ID as message key
 
 **Decision:** Key `step.ready` messages by `workflow_id` and use three topic partitions.
@@ -169,13 +174,99 @@ that unit.
 **Tradeoff:** The service has two entry paths for some commands. The transactional methods are
 explicitly named, never commit, and share the same transition helpers and locks.
 
-## Sequential noop execution and unsupported steps
+## Phase 2 sequential noop execution (superseded by Phase 3 attempts)
 
-**Decision:** Phase 2 workers execute only deterministic `noop` steps, one current step at a time.
-An unsupported ready step is failed with `UNSUPPORTED_STEP_TYPE`.
+**Decision:** Phase 2 workers originally executed deterministic `noop` directly. Phase 3 replaced
+that path with durable scheduling and a separate executor; unsupported types now fail at tool
+execution and are not crash-retried.
 
 **Reason:** This proves delivery and state correctness without introducing external side-effect
 ambiguity or long-running execution semantics.
 
-**Tradeoff:** Worker leases, heartbeats, retries, parallel DAGs, and tool execution remain for
-later phases.
+**Tradeoff:** Phase 3 adds leases and bounded crash recovery; parallel DAGs and arbitrary tools
+remain deferred.
+
+## Durable attempts and separation from Kafka ingestion
+
+**Decision:** A Kafka consumer commits a PENDING attempt with its inbox record, then commits the
+offset. A separate executor claims the attempt from PostgreSQL.
+
+**Reason:** Long external calls must not keep a Kafka message in-flight or a PostgreSQL transaction
+open. PostgreSQL attempts survive consumer/executor death independently of Kafka offsets.
+
+**Tradeoff:** Another polling process and durable table are required. Kafka is still useful for
+ordered, replayable workflow-readiness transport; PostgreSQL is the work-ownership authority.
+
+## PostgreSQL claiming with `SKIP LOCKED`
+
+**Decision:** Executors lock workflow/steps/attempt in a consistent order and use `FOR UPDATE SKIP
+LOCKED` while claiming eligible attempts. The scheduler uses the same pattern for expiry.
+
+**Reason:** Multiple executors/schedulers can compete without process-local locks or duplicate
+ownership. Database uniqueness constraints provide a second line of defense.
+
+**Tradeoff:** Same-workflow mutations serialize, deliberately preserving sequential invariants.
+Polling has bounded intervals and may add small scheduling delay.
+
+## Leases, heartbeats, and fencing tokens
+
+**Decision:** A claim generates a random UUID `lease_token` alongside `executor_id`; periodic
+heartbeats and finalization compare both with durable RUNNING status and an unexpired lease.
+
+**Reason:** A human-readable ID may be reused after a process restart. The token identifies one
+ownership generation and rejects a stale process after expiry/replacement.
+
+**Tradeoff:** Executors must keep heartbeating during long operations. Temporary database outages
+can cause expiry and duplicate safe execution; they cannot grant two valid finalizations.
+
+## Database time is lease authority
+
+**Decision:** Claim, heartbeat eligibility, finalization validity, and scheduler expiry use
+PostgreSQL `clock_timestamp()` rather than executor/scheduler host clocks.
+
+**Reason:** Clock skew between distributed hosts must not decide ownership.
+
+**Tradeoff:** PostgreSQL availability is necessary for lease renewal and recovery.
+
+## Reserve/execute/finalize boundaries
+
+**Decision:** Commit the claim before external I/O; commit finalization in a second transaction.
+No Continuum database row lock is held during an HTTP request or slow tool.
+
+**Reason:** A transaction cannot span an independent payment API, and a long lock would block
+progress/cancellation. Crash recovery depends on a durable RUNNING attempt between boundaries.
+
+**Tradeoff:** The result can be ambiguous after an external success and worker death. Safe retry
+therefore depends on the external operation contract, not on a fictitious cross-system transaction.
+
+## Stable per-step operation ID and explicit retry safety
+
+**Decision:** Derive `continuum:<step_id>` once per logical step, not per attempt. Register each
+tool's retry semantics explicitly. `mock_refund` uses the key in the external HTTP header; unknown
+or non-idempotent operations are not automatically recovered.
+
+**Reason:** A new key on attempt 2 could repeat a refund. An API without reliable idempotency or
+reconciliation cannot safely recover an ambiguous side effect.
+
+**Tradeoff:** The current tool set is intentionally small. Production integrations must document
+key scope/retention, parameter matching, and reconciliation before enabling retries.
+
+## Independent mock-payments storage
+
+**Decision:** Use a separate PostgreSQL instance and HTTP service for deterministic refunds, with
+a unique idempotency key and a test-only post-commit response delay.
+
+**Reason:** Sharing Continuum's transaction would hide the cross-system ambiguity Phase 3 tests.
+The delayed response exposes a real side-effect-committed/worker-not-finalized boundary.
+
+**Tradeoff:** The mock is local and deliberately simple, not a payment processor or production
+service. Its testing controls and development credentials must not be exposed publicly.
+
+## No Redis for leases
+
+**Decision:** Store correctness-critical leases in PostgreSQL with attempts and workflow state.
+
+**Reason:** Expiry, replacement, and finalization need one durable transactional authority.
+
+**Tradeoff:** Redis could later help caching or rate limiting, but would add another consistency
+boundary for ownership without a Phase 3 need.

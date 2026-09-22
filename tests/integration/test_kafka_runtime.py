@@ -11,9 +11,10 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 from aiokafka.admin import AIOKafkaAdminClient, NewTopic
 from sqlalchemy import func, select
 
-from durable_agent_runtime.core.config import get_settings
+from durable_agent_runtime.core.config import Settings, get_settings
 from durable_agent_runtime.db.models import (
     ConsumedEvent,
+    ExecutionAttempt,
     OutboxEvent,
     StateTransition,
     Workflow,
@@ -22,7 +23,9 @@ from durable_agent_runtime.db.models import (
 from durable_agent_runtime.dispatcher.main import dispatch_loop, dispatch_once
 from durable_agent_runtime.domain.enums import StepStatus, WorkflowStatus
 from durable_agent_runtime.events import StepReadyEvent
+from durable_agent_runtime.execution.executor import execute_attempt, executor_loop
 from durable_agent_runtime.schemas.workflows import WorkflowCreate
+from durable_agent_runtime.services.execution import ExecutionService
 from durable_agent_runtime.services.workflows import WorkflowService
 from durable_agent_runtime.worker.main import DeadLetterRecord, consume_loop, handle_record
 from tests.conftest import TestSession
@@ -110,6 +113,20 @@ async def audit_count(workflow_id: UUID) -> int:
         )
 
 
+async def execute_one(executor_id: str = "test-executor") -> None:
+    async with TestSession() as session:
+        attempt = await ExecutionService(session).claim_next(
+            executor_id=executor_id, lease_seconds=20
+        )
+    assert attempt is not None
+    assert (
+        await execute_attempt(
+            attempt, executor_id=executor_id, sessions=TestSession, settings=Settings()
+        )
+        == "succeeded"
+    )
+
+
 async def test_dispatcher_publishes_acknowledged_event_with_stable_envelope(
     topics: tuple[str, str], producer: AIOKafkaProducer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -177,8 +194,9 @@ async def test_duplicate_delivery_and_lost_offset_ack_are_harmless(
             await handle_record(
                 original, producer, worker_id="worker-a", consumer_group=group, sessions=TestSession
             )
-            == "processed"
+            == "scheduled"
         )
+        await execute_one()
         # Deliberately omit the Kafka offset commit. Republish the exact envelope/event ID.
         await producer.send_and_wait(ready, key=original.key, value=original.value)
         duplicate = await asyncio.wait_for(client.getone(), timeout=15)
@@ -217,8 +235,9 @@ async def test_duplicate_delivery_and_lost_offset_ack_are_harmless(
                 consumer_group=group,
                 sessions=TestSession,
             )
-            == "processed"
+            == "scheduled"
         )
+        await execute_one()
         async with TestSession() as session:
             completed = await WorkflowService(session).get_workflow(workflow_id)
             assert completed.status == WorkflowStatus.SUCCEEDED
@@ -334,6 +353,17 @@ async def test_three_workers_complete_twenty_sequential_workflows(
         tasks.append(
             asyncio.create_task(dispatch_loop(stop, TestSession, producer, poll_interval=0.05))
         )
+        tasks.extend(
+            asyncio.create_task(
+                executor_loop(
+                    stop,
+                    TestSession,
+                    executor_id=f"executor-{i}",
+                    settings=Settings(executor_poll_interval_seconds=0.02),
+                )
+            )
+            for i in range(3)
+        )
         async with asyncio.timeout(90):
             while True:
                 for task in tasks:
@@ -360,6 +390,14 @@ async def test_three_workers_complete_twenty_sequential_workflows(
                 )
             )
             assert len(workers) >= 2
+            executors = set(
+                await session.scalars(
+                    select(ExecutionAttempt.executor_id).where(
+                        ExecutionAttempt.workflow_id.in_(ids)
+                    )
+                )
+            )
+            assert len(executors) >= 2
             assert (
                 await session.scalar(
                     select(func.count())
