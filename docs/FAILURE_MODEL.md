@@ -1,4 +1,4 @@
-# Failure Model through Phase 3
+# Failure Model through Phase 4
 
 Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a transactional outbox, an idempotent inbox, and durable leased execution attempts. It does **not** promise exactly-once distributed or arbitrary external execution.
 
@@ -15,6 +15,8 @@ Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a 
 - **Concurrent executors/recovery schedulers:** PostgreSQL locks, `SKIP LOCKED`, and unique attempt indexes prevent duplicate claims or replacement generations. Tests use independent concurrent sessions.
 - **Healthy long work:** A heartbeat extends an unexpired lease; tests run longer than the initial lease and observe one attempt.
 - **Transaction rollback:** Inbox + initial scheduling and attempt finalization + step/audit/outbox roll back as units. No Kafka offset is committed before initial scheduling commits.
+- **Repeated, injected fault boundaries:** FaultLab exercises container SIGKILL before execution, during pure work, and after an independently committed refund; process pause without heartbeats; broker/database outages; ack-before-publish-finalization dispatcher death; Kafka replay/missed offset acknowledgement; malformed messages; stale fencing; and concurrent recovery. Every run preserves raw per-trial evidence and independently checks refund count.
+- **Outbox broker-I/O lock duration:** Phase 4 moved Kafka publication outside PostgreSQL row-lock transactions. Expiring, fenced outbox claims keep crashes recoverable; consumer dedupe still handles re-publication.
 
 ## Boundary table
 
@@ -36,5 +38,9 @@ Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a 
 - A transient payment/DB outage can lead to lease expiry and repeated **safe** calls. Max attempts are bounded, but there is no general retry/backoff policy, circuit breaker, or tool-specific reconciliation yet.
 - Cancellation fences durable finalization but cannot guarantee that an already-sent external HTTP request was cancelled before its effect. Human approval and compensating actions remain future work.
 - Kafka is one local KRaft broker with a named volume, not broker HA or disaster recovery. Multi-region recovery is not implemented.
-- LLM/model failures, arbitrary tool timeouts, code sandbox crashes, human approval, Redis coordination, OpenTelemetry, Kubernetes, and a full FaultLab campaign remain planned.
-- A database interruption around a commit can leave a caller uncertain whether that commit succeeded. Durable rereads and idempotent commands/keys limit harm; comprehensive reconciliation and large-scale fault testing are Phase 4+ work.
+- LLM/model failures, arbitrary tool timeouts, code sandbox crashes, human approval, Redis coordination, OpenTelemetry, and Kubernetes remain planned. FaultLab validates the current supported operations, not these absent capabilities.
+- A database interruption around a commit can leave a caller uncertain whether that commit succeeded. Durable rereads and idempotent commands/keys limit harm; arbitrary external reconciliation remains future work.
+- A continuously failing external service can exhaust `max_attempts` and correctly fail a workflow with no refund. FaultLab treats that as a **correct bounded failure**, not a recovered workflow.
+- Graceful executor restart may finish one in-flight attempt while heartbeating; SIGKILL/pause scenarios are separate. FaultLab originally expected two attempts from a graceful restart and corrected that harness assumption rather than altering runtime behavior.
+- FaultLab's first missed-heartbeat experiment allowed the faulted executor to reclaim its own replacement, producing three safe attempts. The injector now pauses the live container to prevent that test artifact. The original failed trial remains in ignored raw artifacts and is not mixed with final clean-campaign percentages.
+- FaultLab's first concurrent-recovery experiment raced a background scheduler in addition to its intended two scans. It now stops that scheduler for the controlled two-session race. This was an experiment-isolation defect, not a duplicate-attempt runtime bug.

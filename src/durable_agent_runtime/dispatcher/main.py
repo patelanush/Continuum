@@ -1,12 +1,14 @@
-"""Poll durable outbox rows and publish acknowledged Kafka messages."""
+"""Publish durable outbox messages without holding database locks over broker I/O."""
 
 import asyncio
 import logging
+import os
 import signal
-from datetime import UTC, datetime
+from datetime import timedelta
+from uuid import UUID, uuid4
 
 from aiokafka import AIOKafkaProducer
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from durable_agent_runtime.core.config import get_settings
@@ -18,51 +20,120 @@ from durable_agent_runtime.events import StepReadyEvent, workflow_message_key
 logger = logging.getLogger(__name__)
 
 
-async def dispatch_once(
-    sessions: async_sessionmaker[AsyncSession], producer: AIOKafkaProducer, *, batch_size: int = 20
-) -> int:
-    """Publish a bounded batch; the row lock prevents competing dispatchers."""
+async def claim_batch(
+    sessions: async_sessionmaker[AsyncSession], *, batch_size: int, lease_seconds: float
+) -> list[tuple[OutboxEvent, UUID]]:
+    """Short transaction; a crashed publisher's claim expires by database time."""
     async with sessions() as session, session.begin():
-        result = await session.scalars(
-            select(OutboxEvent)
-            .where(OutboxEvent.published_at.is_(None))
-            .order_by(OutboxEvent.created_at, OutboxEvent.id)
-            .limit(batch_size)
-            .with_for_update(skip_locked=True)
+        now = await session.scalar(select(func.clock_timestamp()))
+        assert now is not None
+        rows = list(
+            await session.scalars(
+                select(OutboxEvent)
+                .where(
+                    OutboxEvent.published_at.is_(None),
+                    (OutboxEvent.publish_lease_expires_at.is_(None))
+                    | (OutboxEvent.publish_lease_expires_at < func.clock_timestamp()),
+                )
+                .order_by(OutboxEvent.created_at, OutboxEvent.id)
+                .limit(batch_size)
+                .with_for_update(skip_locked=True)
+            )
         )
-        rows = list(result)
+        claimed: list[tuple[OutboxEvent, UUID]] = []
         for row in rows:
+            token = uuid4()
+            row.publish_lease_token = token
+            row.publish_lease_expires_at = now + timedelta(seconds=lease_seconds)
             row.publish_attempts += 1
-            try:
-                event = StepReadyEvent.from_outbox(row)
-                await asyncio.wait_for(
-                    producer.send_and_wait(
-                        row.topic, key=workflow_message_key(row.workflow_id), value=event.to_bytes()
-                    ),
-                    timeout=10,
-                )
-            except Exception as exc:
-                row.last_error = str(exc)[:1000]
-                logger.warning(
-                    "process_type=dispatcher operation=publish_failed event_id=%s workflow_id=%s "
-                    "attempt=%s error=%s",
-                    row.id,
-                    row.workflow_id,
-                    row.publish_attempts,
-                    type(exc).__name__,
-                )
-            else:
-                row.published_at = datetime.now(UTC)
-                row.last_error = None
-                logger.info(
-                    "process_type=dispatcher operation=published event_id=%s workflow_id=%s "
-                    "topic=%s attempt=%s",
-                    row.id,
-                    row.workflow_id,
-                    row.topic,
-                    row.publish_attempts,
-                )
-        return len(rows)
+            claimed.append((row, token))
+        return claimed
+
+
+async def finish_publish(
+    sessions: async_sessionmaker[AsyncSession],
+    event_id: UUID,
+    token: UUID,
+    *,
+    error: str | None,
+) -> bool:
+    """Fenced finalization: a superseded publisher cannot update a newer claim."""
+    values: dict[str, object] = {
+        "publish_lease_token": None,
+        "publish_lease_expires_at": None,
+        "last_error": error,
+    }
+    if error is None:
+        values["published_at"] = func.clock_timestamp()
+    async with sessions() as session, session.begin():
+        updated = await session.scalar(
+            update(OutboxEvent)
+            .where(
+                OutboxEvent.id == event_id,
+                OutboxEvent.publish_lease_token == token,
+                OutboxEvent.published_at.is_(None),
+            )
+            .values(**values)
+            .returning(OutboxEvent.id)
+        )
+        return updated is not None
+
+
+async def dispatch_once(
+    sessions: async_sessionmaker[AsyncSession],
+    producer: AIOKafkaProducer,
+    *,
+    batch_size: int = 20,
+    lease_seconds: float = 30,
+) -> int:
+    """At-least-once publish; each event ID survives an ack-before-finalize crash."""
+    claimed = await claim_batch(sessions, batch_size=batch_size, lease_seconds=lease_seconds)
+
+    async def publish(row: OutboxEvent, token: UUID) -> None:
+        try:
+            event = StepReadyEvent.from_outbox(row)
+            await asyncio.wait_for(
+                producer.send_and_wait(
+                    row.topic, key=workflow_message_key(row.workflow_id), value=event.to_bytes()
+                ),
+                timeout=10,
+            )
+            # Test-only hook. FaultLab kills the dispatcher after the broker ack;
+            # the claim then expires, so the same event ID is republished.
+            if (
+                os.getenv("APP_ENV") == "faultlab"
+                and os.getenv("FAULTLAB_DISPATCHER_PAUSE_AFTER_ACK") == "1"
+            ):
+                await asyncio.Event().wait()
+        except Exception as exc:
+            await finish_publish(sessions, row.id, token, error=str(exc)[:1000])
+            logger.warning(
+                "process_type=dispatcher operation=publish_failed event_id=%s workflow_id=%s "
+                "attempt=%s error=%s",
+                row.id,
+                row.workflow_id,
+                row.publish_attempts,
+                type(exc).__name__,
+            )
+        else:
+            owned = await finish_publish(sessions, row.id, token, error=None)
+            logger.info(
+                "process_type=dispatcher operation=published event_id=%s workflow_id=%s "
+                "topic=%s attempt=%s claim_owned=%s",
+                row.id,
+                row.workflow_id,
+                row.topic,
+                row.publish_attempts,
+                owned,
+            )
+
+    results = await asyncio.gather(
+        *(publish(row, token) for row, token in claimed), return_exceptions=True
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.error("process_type=dispatcher operation=finalize_failed error=%r", result)
+    return len(claimed)
 
 
 async def dispatch_loop(
@@ -71,18 +142,19 @@ async def dispatch_loop(
     producer: AIOKafkaProducer,
     *,
     poll_interval: float,
+    lease_seconds: float = 30,
 ) -> None:
     while not stop.is_set():
         try:
-            count = await dispatch_once(sessions, producer)
+            await dispatch_once(sessions, producer, lease_seconds=lease_seconds)
         except Exception:
             logger.exception("process_type=dispatcher operation=poll_failed")
-            count = 0
-        if count < 20:
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=poll_interval)
-            except TimeoutError:
-                pass
+        # Also pace unsuccessful immediate publishes (for example an invalid
+        # outbox envelope); otherwise a poisoned row becomes a tight DB loop.
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=poll_interval)
+        except TimeoutError:
+            pass
 
 
 async def run() -> None:
@@ -114,7 +186,11 @@ async def run() -> None:
         return
     try:
         await dispatch_loop(
-            stop, SessionFactory, producer, poll_interval=settings.outbox_poll_interval
+            stop,
+            SessionFactory,
+            producer,
+            poll_interval=settings.outbox_poll_interval,
+            lease_seconds=settings.outbox_publish_lease_seconds,
         )
     finally:
         await producer.stop()

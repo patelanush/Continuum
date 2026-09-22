@@ -20,7 +20,12 @@ from durable_agent_runtime.db.models import (
     Workflow,
     WorkflowStep,
 )
-from durable_agent_runtime.dispatcher.main import dispatch_loop, dispatch_once
+from durable_agent_runtime.dispatcher.main import (
+    claim_batch,
+    dispatch_loop,
+    dispatch_once,
+    finish_publish,
+)
 from durable_agent_runtime.domain.enums import StepStatus, WorkflowStatus
 from durable_agent_runtime.events import StepReadyEvent
 from durable_agent_runtime.execution.executor import execute_attempt, executor_loop
@@ -177,6 +182,34 @@ async def test_dispatcher_retries_same_event_after_publish_failure(
         assert StepReadyEvent.from_bytes(record.value).event_id == original_id
     finally:
         await client.stop()
+
+
+async def test_outbox_claim_releases_row_lock_and_fences_stale_publisher(
+    topics: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ready, _dead = topics
+    await workflow(1, ready, monkeypatch)
+    first = await claim_batch(TestSession, batch_size=1, lease_seconds=30)
+    assert len(first) == 1
+    row, token = first[0]
+    # A separate transaction can lock the row while broker I/O is pending.
+    async with TestSession() as session, session.begin():
+        available = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.id == row.id).with_for_update(nowait=True)
+        )
+        assert available is not None
+        assert available.published_at is None
+    assert await claim_batch(TestSession, batch_size=1, lease_seconds=30) == []
+    async with TestSession() as session, session.begin():
+        current = await session.get(OutboxEvent, row.id)
+        assert current is not None
+        current.publish_lease_expires_at = current.created_at
+    replacement = await claim_batch(TestSession, batch_size=1, lease_seconds=30)
+    assert len(replacement) == 1
+    assert replacement[0][0].id == row.id
+    assert replacement[0][1] != token
+    assert not await finish_publish(TestSession, row.id, token, error=None)
+    assert await finish_publish(TestSession, row.id, replacement[0][1], error=None)
 
 
 async def test_duplicate_delivery_and_lost_offset_ack_are_harmless(

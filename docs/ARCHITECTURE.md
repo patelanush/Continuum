@@ -1,4 +1,4 @@
-# Architecture through Phase 3
+# Architecture through Phase 4
 
 ## Authority and layers
 
@@ -6,7 +6,7 @@ PostgreSQL owns workflow, step, attempt, lease, transition audit, outbox, and co
 
 ## Producer and event-ingestion paths
 
-Starting a workflow commits `PENDING → RUNNING`, step 0 `PENDING → READY`, audit rows, and a `step.ready` outbox row atomically. Successful nonfinal step completion similarly commits the current step, next readiness, pointer, audit, and downstream outbox. The dispatcher uses `FOR UPDATE SKIP LOCKED`, acknowledged Kafka sends, and a stable outbox ID as `event_id`. A publish that succeeds just before the dispatcher crashes can be repeated; inbox dedupe is required.
+Starting a workflow commits `PENDING → RUNNING`, step 0 `PENDING → READY`, audit rows, and a `step.ready` outbox row atomically. Successful nonfinal step completion similarly commits the current step, next readiness, pointer, audit, and downstream outbox. The dispatcher briefly claims unpublished rows with `FOR UPDATE SKIP LOCKED` and a database-time, UUID-fenced publish lease, then **commits before Kafka I/O**. It waits for broker acknowledgement before a separate compare-and-set transaction writes `published_at`. Failed sends release the claim and record an error; a crashed publisher's claim expires. A publish that succeeds just before the dispatcher crashes can be repeated with the same outbox ID as `event_id`; inbox dedupe remains required. A slow send can outlive a claim and cause duplicate publication, but a stale publisher cannot finalize another claim.
 
 The event consumer validates the versioned JSON envelope and key against the durable outbox row. In **one** PostgreSQL transaction, it inserts `(consumer_group,event_id)` using `ON CONFLICT DO NOTHING`, checks workflow/step truth, and creates attempt 1 `PENDING` if current and not already scheduled. A duplicate or stale event does not create work. Only after this transaction commits does it commit the Kafka offset. Invalid messages go to the acknowledged DLQ before source-offset commit. The consumer does not execute tools or hold a Kafka message during a long operation.
 
@@ -35,3 +35,11 @@ The runtime only registers `IDEMPOTENT` (`noop`, `slow_noop`) and `IDEMPOTENCY_K
 The service locks workflow then ordered steps for state changes. Claim and recovery lock in the same order before the attempt, preventing process-local correctness dependencies and limiting same-workflow contention. Existing PostgreSQL constraints still enforce unique step positions and one READY/RUNNING sequential step. Three Kafka partitions let different workflows flow through separate event consumers; `workflow_id` is the Kafka message key and ordering is only per partition. Executors compete independently for durable attempts using PostgreSQL `SKIP LOCKED`, so Kafka partition ownership does not pin a long tool call to one worker.
 
 Compose uses one Kafka KRaft broker and named volumes, not broker high availability. The primary and mock-payments PostgreSQL instances are separate. Graceful SIGTERM stops new claims and drains an in-flight call for a bounded period while heartbeating. SIGKILL skips cleanup, which is why lease recovery exists.
+
+## FaultLab boundary and evidence
+
+FaultLab is an external harness, not a new workflow-state authority. It uses an exact, isolated Compose project with its own PostgreSQL/Kafka/payments volumes and different host ports. Docker controls are centralized and reject another project name. Each scenario records experiment/trial IDs, seed, Git revision and dirty state, injection boundary, expected/observed terminal status, attempts, transition/outbox duplicates, independently counted refunds, timing, and failure details in JSONL. Reports are regenerated from that raw file; no experiment results are written into Continuum's runtime schema.
+
+Scenario cleanup and campaign exclusivity matter: container-kill, Kafka-stop, PostgreSQL-stop, and scheduler-race trials run serially; workflow-isolated baseline, duplicate-event, and external-response trials can run concurrently at a configured cap. The deliberately unsafe refund comparison uses two different idempotency keys only in the harness, never as a runtime option. FaultLab-only executor/dispatcher hooks are gated by `APP_ENV=faultlab`; mock-payment failure modes are rejected otherwise.
+
+The harness checks PostgreSQL state and the *independent* payments service. A succeeded workflow with a second refund, missing refund, duplicate audit edge, duplicate logical outbox event, unexpected active attempt, or incorrect sequential step position is a failed trial. Some faults (SIGKILL, `docker pause`, Kafka/PostgreSQL outage) are real process/container failures. Stale-token and concurrent-scheduler tests intentionally force expiry with database time and run genuine concurrent PostgreSQL transactions. The distinction is retained in each scenario's name and documentation.

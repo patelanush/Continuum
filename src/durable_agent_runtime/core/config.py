@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:19092"
     kafka_consumer_group: str = "continuum-workers-v1"
     outbox_poll_interval: float = 0.5
+    outbox_publish_lease_seconds: float = Field(default=30, gt=10)
     executor_lease_seconds: float = Field(default=20, gt=0)
     executor_heartbeat_seconds: float = Field(default=4, gt=0)
     executor_poll_interval_seconds: float = Field(default=0.5, gt=0)

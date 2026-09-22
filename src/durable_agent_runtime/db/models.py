@@ -198,16 +198,28 @@ class OutboxEvent(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publish_lease_token: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    publish_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     publish_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         CheckConstraint("schema_version >= 1", name="outbox_schema_version_positive"),
         CheckConstraint("publish_attempts >= 0", name="outbox_attempts_nonnegative"),
+        CheckConstraint(
+            "(publish_lease_token IS NULL) = (publish_lease_expires_at IS NULL)",
+            name="ck_outbox_publish_lease_pair",
+        ),
         Index(
             "ix_outbox_events_unpublished", created_at, id, postgresql_where=published_at.is_(None)
         ),
         Index("ix_outbox_events_workflow_id", workflow_id),
+        Index(
+            "ix_outbox_events_available",
+            publish_lease_expires_at,
+            created_at,
+            postgresql_where=published_at.is_(None),
+        ),
     )
 
 

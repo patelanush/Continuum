@@ -1,8 +1,9 @@
-.PHONY: up down reset migrate migration test test-unit test-integration test-kafka test-execution test-recovery test-payments lint format format-check typecheck check logs scale-workers scale-executors
+.PHONY: up down reset migrate migration test test-unit test-integration test-kafka test-execution test-recovery test-payments lint format format-check typecheck check logs scale-workers scale-executors faultlab-up faultlab-smoke faultlab-reliability faultlab-side-effects faultlab-clean
 
 DATABASE_URL ?= postgresql+asyncpg://durable:durable@localhost:55433/durable
 TEST_DATABASE_URL ?= postgresql+asyncpg://durable:durable@localhost:55433/durable_test
 KAFKA_BOOTSTRAP_SERVERS ?= localhost:19092
+FAULTLAB_TEST_DATABASE_URL = postgresql+asyncpg://durable:durable@localhost:55435/durable_test
 
 up:
 	docker compose up --build -d
@@ -25,8 +26,29 @@ migrate:
 migration:
 	DATABASE_URL=$(DATABASE_URL) uv run alembic revision --autogenerate -m "$(message)"
 
-test:
-	TEST_DATABASE_URL=$(TEST_DATABASE_URL) KAFKA_BOOTSTRAP_SERVERS=$(KAFKA_BOOTSTRAP_SERVERS) uv run pytest
+faultlab-up:
+	uv run continuum-faultlab up
+
+faultlab-smoke:
+	uv run continuum-faultlab campaign smoke
+
+faultlab-reliability:
+	uv run continuum-faultlab campaign reliability --concurrency 8
+
+faultlab-side-effects:
+	uv run continuum-faultlab campaign side-effects
+
+faultlab-clean:
+	uv run continuum-faultlab clean
+
+test: faultlab-up
+	@trap 'uv run continuum-faultlab clean' EXIT; \
+	DATABASE_URL=$(FAULTLAB_TEST_DATABASE_URL) uv run alembic upgrade head && \
+	RUN_FAULTLAB_DOCKER=1 TEST_DATABASE_URL=$(FAULTLAB_TEST_DATABASE_URL) \
+	KAFKA_BOOTSTRAP_SERVERS=localhost:19093 \
+	MOCK_PAYMENTS_URL=http://localhost:18001 \
+	PAYMENTS_DATABASE_URL=postgresql://payments:payments@localhost:55436/payments \
+	uv run pytest
 
 test-unit:
 	uv run pytest tests/unit --no-cov

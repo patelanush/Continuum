@@ -1,21 +1,20 @@
-# Durable Agent Runtime (Continuum)
+# Continuum — Durable Agent Runtime
 
 A fault-tolerant execution runtime for long-running AI workflows.
 
-**What happens when an AI agent successfully performs an external action, but its worker crashes before recording the result?** Continuum's Phase 3 foundation records durable execution attempts, fences them with short leases, and retries only operations with explicit idempotency semantics. It does **not** claim exactly-once execution across PostgreSQL, Kafka, and an external service.
+**What happens when an AI agent completes an external action, but its worker dies before recording the result?** Continuum keeps workflow truth in PostgreSQL, transports readiness through at-least-once Kafka, and uses durable attempts, leases, fencing, and stable per-step idempotency keys to recover supported operations. FaultLab now injects repeated failures and checks durable workflow *and independent external-service state*. Continuum does **not** claim exactly-once distributed execution or safe automatic retries for arbitrary non-idempotent APIs.
 
-## Implemented through Phase 3
+## Implemented through Phase 4
 
-- Sequential workflow and step state machines, PostgreSQL row locks and constraints, transactional transition audit
+- Sequential workflow/step/attempt state machines, PostgreSQL transactions, row locks, constraints, and transition audit
 - FastAPI create/get/list/start/cancel/history API and read-only attempt diagnostics
-- Transactional outbox, Kafka KRaft transport, versioned JSON events, inbox dedupe, manual offset commits, DLQ
-- Event consumers that transactionally turn a valid `step.ready` message into one `PENDING` execution attempt
-- Independent executors that claim attempts using PostgreSQL `FOR UPDATE SKIP LOCKED`, with UUID lease tokens and heartbeats
-- Recovery scheduler that uses PostgreSQL time to expire abandoned attempts and schedule bounded replacements
-- Deterministic `noop`, `slow_noop`, and an idempotency-key-backed `mock_refund` tool
-- Separate mock-payments HTTP service and PostgreSQL datastore for the external-side-effect crash demonstration
+- Transactional outbox, Kafka KRaft transport, versioned events, inbox dedupe, manual offset commits, and DLQ
+- Separate event consumers, leased executors, heartbeats, database-time recovery, and fenced finalization
+- Deterministic `noop`/`slow_noop` tools and an idempotency-key-backed `mock_refund` against an independent payments HTTP service/PostgreSQL
+- FaultLab CLI, isolated Compose project, versioned fault scenarios, deterministic seeds, per-trial JSONL, derived reports, and an intentionally unsafe refund-retry comparison
+- Expiring, fenced outbox publication claims: broker I/O no longer holds PostgreSQL row locks
 
-There are no LLMs, real payments, arbitrary tools, Redis, Kubernetes, or HA Kafka cluster.
+There are no LLMs, real payments, arbitrary tool reconciliation, Redis, Kubernetes, or Kafka high-availability cluster.
 
 ## Architecture
 
@@ -24,37 +23,36 @@ flowchart TD
     Client --> API[FastAPI]
     API --> WS[Workflow Service]
     WS --> PG[(Continuum PostgreSQL)]
-    PG -->|outbox rows| D[Outbox Dispatcher]
-    D --> K[(Kafka KRaft)]
+    PG -->|leased outbox claim| D[Dispatcher]
+    D -->|acknowledged publish| K[(Single Kafka KRaft broker)]
     K --> C[Event Consumer Group]
-    C -->|inbox + pending attempt; then offset commit| PG
+    C -->|inbox + PENDING attempt; then offset commit| PG
     PG -->|SKIP LOCKED claim| E[Executor Pool]
-    E -->|stable Idempotency-Key| M[Mock Payments HTTP]
+    E -->|stable step key| M[Mock Payments HTTP]
     M --> MP[(Independent Payments PostgreSQL)]
-    E -->|fenced finalization| PG
+    E -->|fenced finalize| PG
     R[Recovery Scheduler] -->|expired leases, DB time| PG
+    F[FaultLab - separate Compose project] -.->|controlled process and broker faults| D
+    F -.->|controlled crashes and pauses| E
+    F -.->|durable assertions| PG
+    F -.->|independent side-effect count| M
+    F --> A[JSONL trials and generated summaries]
 ```
 
-The execution boundary is **reserve → commit → external execution without an open Continuum DB transaction → fenced finalize → commit**. Kafka ingestion ends after durable attempt creation; a Kafka record is never held in-flight during a long tool call. A killed executor leaves an attempt whose lease expires. Another executor retries the same logical step with the same operation key (`continuum:<step_id>`). The mock payment API returns the original refund for a repeated key and matching parameters. This makes the demonstrated refund retry safe; it does not make arbitrary external effects safe.
+Execution remains **reserve → commit → external execution without an open Continuum database transaction → fenced finalize → commit**. A crashed attempt expires; a replacement sends the same `continuum:<step_id>` key. Mock-payments returns the original refund for a matching repeated request. That is a demonstrated keyed operation contract, not a guarantee for all external APIs.
 
 ## Quick start
 
-Requires Docker Compose. All services use local, no-cost images and safe development credentials. PostgreSQL, Kafka, and mock-payments state use named volumes.
+Requires Docker Compose and Python 3.12 with [uv](https://docs.astral.sh/uv/). All services use local images and development credentials. Main-stack PostgreSQL, Kafka, and mock-payments use named volumes.
 
 ```bash
+uv sync
 make up
 curl http://localhost:8000/health/ready
 curl http://localhost:8001/health/ready
 ```
 
-For distributed execution:
-
-```bash
-docker compose up --build -d --scale worker=3 --scale executor=3
-docker compose ps
-```
-
-`make down` retains volumes. `make reset` deletes this project's PostgreSQL, payments, and Kafka volumes irreversibly. Host ports default to API `8000`, mock-payments `8001`, Continuum PostgreSQL `55433`, payments PostgreSQL `55434`, and Kafka `19092`; the database/broker ports are overrideable in Compose.
+Scale normal development workers/executors with `docker compose up --build -d --scale worker=3 --scale executor=3`. `make down` retains main-stack volumes; `make reset` **deletes** those volumes. Host ports default to API `8000`, mock-payments `8001`, Continuum PostgreSQL `55433`, payments PostgreSQL `55434`, and Kafka `19092`.
 
 ## API example
 
@@ -68,33 +66,37 @@ curl -sS http://localhost:8000/api/v1/workflows/WORKFLOW_ID/attempts
 curl -sS http://localhost:8000/api/v1/workflows/WORKFLOW_ID/history
 ```
 
-`/start` returns after its state/outbox transaction, not after execution. Poll GET until `SUCCEEDED` or `FAILED`. Attempts are read-only diagnostics. `mock_refund` input is `{"customer_id":"customer-123","amount":"49.99"}`. `slow_noop` accepts `{"duration_ms":1000}` for lease testing. The mock payment `delay_after_commit_ms` input is **test-only** and deliberately delays its HTTP response after the independent refund commit.
+`/start` returns after its PostgreSQL state/outbox transaction, not after asynchronous execution. Poll GET for `SUCCEEDED` or `FAILED`. The mock refund input is `{"customer_id":"customer-123","amount":"49.99"}`. The `slow_noop` input `{"duration_ms":1000}` and payment post-commit delay are deterministic local testing controls. FaultLab-only payment failure modes are rejected outside `APP_ENV=faultlab`.
 
-Workflow listing uses newest-first bounded offset pagination (`status`, `limit`, `offset`). It should move to cursor pagination before large-scale deployment.
+## FaultLab
 
-## Tests and demonstrations
+FaultLab starts a **separate** `continuum-faultlab` Compose project with its own volumes and host ports (`18000`, `18001`, `55435`, `55436`, `19093`). Its `clean` command removes only this exact project; it never resets normal development data. It executes real SIGKILL/pause/restart, Kafka/PostgreSQL stops, Kafka redelivery, and post-ack publisher crashes. The remaining database-time expiry and stale-token trials deliberately exercise concurrent PostgreSQL service calls. The unsafe refund baseline lives only in the harness.
 
 ```bash
-uv sync
-docker compose up -d --wait postgres kafka mock-payments
-docker compose up kafka-init
-DATABASE_URL=postgresql+asyncpg://durable:durable@localhost:55433/durable_test uv run alembic upgrade head
+uv run continuum-faultlab list
+uv run continuum-faultlab run executor-crash-after-side-effect --runs 1 --seed 42
+uv run continuum-faultlab campaign smoke --concurrency 2
+uv run continuum-faultlab campaign reliability --concurrency 8
+uv run continuum-faultlab report EXPERIMENT_ID
+uv run continuum-faultlab clean
+```
+
+`run` and `campaign` build/start the isolated stack and clean its containers/volumes afterward by default. `--keep-stack` retains it for inspection; `--reuse-stack` uses an already running isolated stack. Raw `config.json`, `trials.jsonl`, `summary.json`, and `summary.md` go under ignored `artifacts/faultlab/<experiment-id>/`. `report` recalculates aggregates from raw trials. `report EXPERIMENT_ID --publish` creates curated `benchmarks/results/` files only if the trial revision matches the current **clean** Git revision. Git commit, dirty state, seed, counts, and environment are recorded; timing varies by machine.
+
+The latest official campaign findings, when published, are in [the benchmark summary](benchmarks/results/phase4-summary.md) and [methodology](docs/FAULTLAB.md). These are local single-broker results, **not** production-scale reliability claims.
+
+## Tests
+
+```bash
 make check
+make test-unit
+make test-kafka
 ```
 
-`make check` runs Ruff format/lint, strict mypy, and the complete unit, PostgreSQL, real-Kafka, API, and real-HTTP suite with an 85% coverage floor. `make test-unit`, `make test-kafka`, `make test-execution`, `make test-recovery`, and `make test-payments` run focused subsets. The application never uses `metadata.create_all()` as startup migration.
-
-With the full scaled stack running, execute the repeatable local crash and distribution demo:
-
-```bash
-uv run python scripts/phase3_demo.py all
-```
-
-It SIGKILLs the precise executor owning a test attempt, polls durable state, and checks a committed refund is not duplicated. It also tests pure-work crash recovery, a heartbeat beyond the original lease, and 20 five-step workflows across multiple executors. The demo changes local state and kills test executor containers; run it only against this local Compose stack.
+`make check` runs Ruff format/lint, strict mypy, and the complete unit, API, PostgreSQL, real-Kafka, real-HTTP, and real-container FaultLab pytest suite with an 85% coverage floor. Its test target builds the **isolated** stack, migrates its separate test database, and cleans FaultLab volumes on exit. Focused Phase 1–3 targets remain in the Makefile. Runtime startup uses Alembic, never `metadata.create_all()`. The full reliability campaign is intentionally **not** part of routine CI.
 
 ## Planned
 
-- Phase 4: dedicated FaultLab and large-scale controlled failure injection
-- Later: arbitrary tool reconciliation, approval gates, LLM integration, sandboxed coding agents, observability, deployment topology
+Phase 5 may add a local LLM provider and a durable agent loop only after the FaultLab evidence is reviewed. Arbitrary non-idempotent tool reconciliation, human approval, sandboxed coding agents, OpenTelemetry, Kubernetes, and broker HA remain unimplemented.
 
-See [Architecture](docs/ARCHITECTURE.md), [Design Decisions](docs/DESIGN_DECISIONS.md), and [Failure Model](docs/FAILURE_MODEL.md) for exact boundaries and limitations.
+See [Architecture](docs/ARCHITECTURE.md), [Design Decisions](docs/DESIGN_DECISIONS.md), [Failure Model](docs/FAILURE_MODEL.md), and [FaultLab methodology](docs/FAULTLAB.md).

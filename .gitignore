@@ -10,5 +10,6 @@ coverage.xml
 htmlcov/
 dist/
 build/
+artifacts/faultlab/
 *.egg-info/
 .DS_Store

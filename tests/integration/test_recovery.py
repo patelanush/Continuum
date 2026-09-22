@@ -170,26 +170,26 @@ async def test_healthy_long_running_executor_heartbeats_past_original_expiry() -
 
 async def test_executor_loop_drains_inflight_work_after_stop_signal() -> None:
     workflow_id, _ = await create_scheduled(
-        step_count=1, step_type="slow_noop", step_input={"duration_ms": 600}
+        step_count=1, step_type="slow_noop", step_input={"duration_ms": 1500}
     )
     stop = asyncio.Event()
     settings = Settings(
-        executor_lease_seconds=0.3,
-        executor_heartbeat_seconds=0.05,
-        executor_poll_interval_seconds=0.02,
+        executor_lease_seconds=0.8,
+        executor_heartbeat_seconds=0.15,
+        executor_poll_interval_seconds=0.05,
     )
     task = asyncio.create_task(
         executor_loop(stop, TestSession, executor_id="draining-executor", settings=settings)
     )
     try:
-        async with asyncio.timeout(3):
+        async with asyncio.timeout(6):
             while True:
                 current = await attempts_for(workflow_id)
                 if current and current[0].status == ExecutionAttemptStatus.RUNNING:
                     break
-                await asyncio.sleep(0.02)
+                await asyncio.sleep(0.05)
         stop.set()
-        await asyncio.wait_for(task, timeout=3)
+        await asyncio.wait_for(task, timeout=6)
         records = await attempts_for(workflow_id)
         assert len(records) == 1
         assert records[0].status == ExecutionAttemptStatus.SUCCEEDED

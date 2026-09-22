@@ -1,4 +1,4 @@
-# Design Decisions through Phase 3
+# Design Decisions through Phase 4
 
 ## PostgreSQL is the source of truth
 
@@ -270,3 +270,51 @@ service. Its testing controls and development credentials must not be exposed pu
 
 **Tradeoff:** Redis could later help caching or rate limiting, but would add another consistency
 boundary for ownership without a Phase 3 need.
+
+## FaultLab is external to runtime truth
+
+**Decision:** Keep experiment configuration and trial results in local JSONL/artifacts rather than workflow PostgreSQL tables.
+
+**Reason:** Fault-injection evidence must not change production workflow invariants or become a second authority. Raw records can be audited and reaggregated independently.
+
+**Tradeoff:** The harness needs filesystem artifact management; ignored raw files are not automatically replicated off the laptop. Small curated summaries can be committed.
+
+## Deterministic, boundary-specific faults
+
+**Decision:** Record a seed and exact injection point for every trial; prefer real SIGKILL, pause, container stop/restart, and Kafka delivery. Use test-only hooks only for boundaries not otherwise observable, such as the dispatcher pause after broker acknowledgement.
+
+**Reason:** Random chaos without recorded seeds and boundary confirmation can produce irreproducible successes. A workflow finishing is insufficient evidence of fault recovery.
+
+**Tradeoff:** Docker-control scenarios are slower and infrastructure-sensitive. Database-level stale-owner/race tests supplement, but are not misrepresented as process crashes.
+
+## Correctness includes independent external effects
+
+**Decision:** For refunds, query mock-payments by unique customer and stable key; count duplicate and lost effects independently of Continuum's status.
+
+**Reason:** `SUCCEEDED` with two refunds is an incorrect trial. The cross-service ambiguity is the reason for Phase 3's stable operation key.
+
+**Tradeoff:** The test mock's idempotency behavior is not a guarantee that a future real API implements the same contract or retention.
+
+## Fenced, expiring outbox claims
+
+**Decision:** Add a short `FOR UPDATE SKIP LOCKED` claim transaction with a UUID token and PostgreSQL-time expiry. Await Kafka outside the database transaction, then mark published only through a token-fenced update.
+
+**Reason:** A controlled pre-change probe held an outbox row lock throughout a 0.5-second broker hold (565 ms transaction). Post-change, a separate transaction could lock that row during the same controlled hold; its claim transaction measured 17.69 ms. The old design could hold a batch of locks across multiple 10-second broker timeouts.
+
+**Tradeoff:** Outbox claims add two nullable columns, an index, and a migration. A crashed or over-time publisher may republish after claim expiry, so the same stable event ID, inbox dedupe, and at-least-once semantics remain mandatory. This is a lock-duration improvement, not an exactly-once claim or a general throughput percentage.
+
+## Bounded executor polling retained
+
+**Decision:** Keep the existing 0.5-second idle polling design for now.
+
+**Reason:** A pre-change focused probe against PostgreSQL observed 10 idle claim queries over 5.155 seconds with one executor (1.94/s) and 30 over 5.174 seconds with three executors (5.80/s). There was no hot loop to justify adding LISTEN/NOTIFY or Redis.
+
+**Tradeoff:** Polling adds scheduling delay and query volume proportional to executor count. Revisit after larger, comparable measurements rather than asserting scalability from this local probe.
+
+## Raw results, clean revisions, and CI scope
+
+**Decision:** Persist every trial before aggregation; publish curated benchmark summaries only when the experiment and current working tree refer to the same clean Git revision. Keep full reliability campaigns manual; CI runs real-container representative scenarios and the normal suite.
+
+**Reason:** Aggregate percentages must be reproducible from raw failures, not hand-written. Thousands of container faults on every push would waste free CI minutes and introduce environmental noise.
+
+**Tradeoff:** Timing will vary by machine and local single-broker topology. A clean local campaign is evidence for this configuration, not a production-scale reliability bound.

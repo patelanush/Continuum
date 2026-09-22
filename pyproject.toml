@@ -19,6 +19,9 @@ dependencies = [
   "uvicorn[standard]>=0.34,<1",
 ]
 
+[project.scripts]
+continuum-faultlab = "durable_agent_runtime.faultlab.cli:main"
+
 [dependency-groups]
 dev = [
   "mypy>=1.14,<2",
@@ -35,7 +38,7 @@ packages = ["src/durable_agent_runtime"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--strict-markers --cov=durable_agent_runtime --cov-report=term-missing --cov-fail-under=85"
-markers = ["integration: requires PostgreSQL", "kafka: requires real Kafka"]
+markers = ["integration: requires PostgreSQL", "kafka: requires real Kafka", "faultlab: requires isolated Docker Compose stack"]
 
 [tool.coverage.run]
 branch = true

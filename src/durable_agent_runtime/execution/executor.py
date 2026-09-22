@@ -167,6 +167,15 @@ async def executor_loop(
                     executor_id=executor_id, lease_seconds=settings.executor_lease_seconds
                 )
             if attempt is not None:
+                if (
+                    settings.app_env == "faultlab"
+                    and os.getenv("FAULTLAB_PAUSE_AFTER_CLAIM") == "1"
+                ):
+                    logger.warning(
+                        "process_type=executor operation=faultlab_paused_after_claim attempt_id=%s",
+                        attempt.id,
+                    )
+                    await asyncio.Event().wait()
                 await execute_attempt(
                     attempt, executor_id=executor_id, sessions=sessions, settings=settings
                 )

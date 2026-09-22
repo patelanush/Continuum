@@ -5,10 +5,11 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID, uuid4
 
 import asyncpg
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +17,10 @@ class RefundRequest(BaseModel):
     customer_id: str = Field(min_length=1, max_length=200)
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     delay_after_commit_ms: int = Field(default=0, ge=0, le=30_000)
+    delay_before_commit_ms: int = Field(default=0, ge=0, le=30_000)
+    faultlab_mode: Literal[
+        "normal", "fail_before_commit", "error_after_commit", "timeout_before_commit"
+    ] = "normal"
 
 
 class RefundResponse(BaseModel):
@@ -62,6 +67,18 @@ async def ready() -> dict[str, str]:
 async def create_refund(
     command: RefundRequest, idempotency_key: str = Header(min_length=1, max_length=200)
 ) -> RefundResponse:
+    if command.faultlab_mode != "normal":
+        if os.getenv("APP_ENV") != "faultlab":
+            raise HTTPException(400, "Fault injection is disabled")
+        if command.faultlab_mode == "fail_before_commit":
+            raise HTTPException(503, "FaultLab failure before refund commit")
+        if command.faultlab_mode == "timeout_before_commit":
+            if command.delay_before_commit_ms < 1:
+                raise HTTPException(400, "FaultLab pre-commit delay must be positive")
+            # The client's read deadline elapses before this independent service
+            # enters its own refund transaction. No side effect is committed.
+            await asyncio.sleep(command.delay_before_commit_ms / 1000)
+            raise HTTPException(503, "FaultLab failure after pre-commit delay")
     async with app.state.pool.acquire() as connection:
         async with connection.transaction():
             inserted = await connection.fetchrow(
@@ -85,6 +102,8 @@ async def create_refund(
     # This delay is deliberately AFTER the independent payments DB transaction commits.
     if inserted is not None and command.delay_after_commit_ms:
         await asyncio.sleep(command.delay_after_commit_ms / 1000)
+    if inserted is not None and command.faultlab_mode == "error_after_commit":
+        raise HTTPException(503, "FaultLab response failure after refund commit")
     return response_from_row(row)
 
 
@@ -102,9 +121,14 @@ async def refund_by_key(key: str) -> RefundResponse:
 
 
 @app.get("/refunds/count")
-async def refund_count() -> dict[str, int]:
+async def refund_count(customer_id: str | None = Query(default=None)) -> dict[str, int]:
     async with app.state.pool.acquire() as connection:
-        count = await connection.fetchval("SELECT count(*) FROM refunds")
+        if customer_id is None:
+            count = await connection.fetchval("SELECT count(*) FROM refunds")
+        else:
+            count = await connection.fetchval(
+                "SELECT count(*) FROM refunds WHERE customer_id = $1", customer_id
+            )
     return {"count": int(count)}
 
 

@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import httpx
@@ -42,6 +42,11 @@ class MockRefundInput(BaseModel):
     customer_id: str = Field(min_length=1, max_length=200)
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     delay_after_commit_ms: int = Field(default=0, ge=0, le=30_000)
+    delay_before_commit_ms: int = Field(default=0, ge=0, le=30_000)
+    faultlab_request_timeout_ms: int = Field(default=0, ge=0, le=30_000)
+    faultlab_mode: Literal[
+        "normal", "fail_before_commit", "error_after_commit", "timeout_before_commit"
+    ] = "normal"
 
 
 @dataclass(frozen=True)
@@ -103,9 +108,21 @@ async def execute_tool(
         "customer_id": command.customer_id,
         "amount": str(command.amount),
         "delay_after_commit_ms": command.delay_after_commit_ms,
+        "delay_before_commit_ms": command.delay_before_commit_ms,
+        "faultlab_mode": command.faultlab_mode,
     }
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
+        timeout: httpx.Timeout | float = 45
+        if command.faultlab_mode == "timeout_before_commit":
+            if command.faultlab_request_timeout_ms < 1:
+                raise PermanentToolError("INVALID_STEP_INPUT", "FaultLab timeout must be positive")
+            timeout = httpx.Timeout(
+                connect=5,
+                read=command.faultlab_request_timeout_ms / 1000,
+                write=5,
+                pool=5,
+            )
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{payments_url.rstrip('/')}/refunds",
                 headers={"Idempotency-Key": context.operation_id},
