@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 
 class RetrySafety(StrEnum):
+    READ_ONLY = "READ_ONLY"
     IDEMPOTENT = "IDEMPOTENT"
     IDEMPOTENCY_KEY_SUPPORTED = "IDEMPOTENCY_KEY_SUPPORTED"
     NON_IDEMPOTENT = "NON_IDEMPOTENT"
@@ -21,6 +22,7 @@ TOOL_SAFETY: dict[str, RetrySafety] = {
     "noop": RetrySafety.IDEMPOTENT,
     "slow_noop": RetrySafety.IDEMPOTENT,
     "mock_refund": RetrySafety.IDEMPOTENCY_KEY_SUPPORTED,
+    "support_agent": RetrySafety.IDEMPOTENCY_KEY_SUPPORTED,
 }
 
 

@@ -89,7 +89,7 @@ def test_registry_and_campaigns_have_stable_names() -> None:
     }
     assert required <= SCENARIOS.keys()
     assert all(scenario.version >= 1 for scenario in SCENARIOS.values())
-    assert set(CAMPAIGNS) == {"smoke", "side-effects", "reliability"}
+    assert set(CAMPAIGNS) == {"smoke", "ai-smoke", "side-effects", "reliability"}
     assert all(set(counts) <= SCENARIOS.keys() for counts in CAMPAIGNS.values())
     assert SCENARIOS["kafka-outage"].exclusive
     assert not SCENARIOS["baseline"].exclusive

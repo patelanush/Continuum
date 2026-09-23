@@ -1,4 +1,4 @@
-.PHONY: up down reset migrate migration test test-unit test-integration test-kafka test-execution test-recovery test-payments lint format format-check typecheck check logs scale-workers scale-executors faultlab-up faultlab-smoke faultlab-reliability faultlab-side-effects faultlab-clean
+.PHONY: up down reset migrate migration test test-unit test-integration test-kafka test-execution test-recovery test-payments test-agent lint format format-check typecheck check logs scale-workers scale-executors faultlab-up faultlab-smoke faultlab-ai-smoke faultlab-reliability faultlab-side-effects faultlab-clean agent-demo-fake agent-demo-ollama
 
 DATABASE_URL ?= postgresql+asyncpg://durable:durable@localhost:55433/durable
 TEST_DATABASE_URL ?= postgresql+asyncpg://durable:durable@localhost:55433/durable_test
@@ -31,6 +31,9 @@ faultlab-up:
 
 faultlab-smoke:
 	uv run continuum-faultlab campaign smoke
+
+faultlab-ai-smoke:
+	uv run continuum-faultlab campaign ai-smoke
 
 faultlab-reliability:
 	uv run continuum-faultlab campaign reliability --concurrency 8
@@ -67,6 +70,15 @@ test-recovery:
 
 test-payments:
 	uv run pytest tests/integration/test_mock_payments.py tests/integration/test_mock_payments_routes.py --no-cov
+
+test-agent:
+	TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest tests/unit/test_agent.py tests/integration/test_agent.py --no-cov
+
+agent-demo-fake:
+	uv run python scripts/phase5_agent_demo.py --provider fake
+
+agent-demo-ollama:
+	uv run python scripts/phase5_agent_demo.py --provider ollama
 
 logs:
 	docker compose logs -f api dispatcher worker executor recovery-scheduler mock-payments kafka

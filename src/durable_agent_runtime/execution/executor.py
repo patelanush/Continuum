@@ -80,9 +80,23 @@ async def execute_attempt(
                 return
 
     heartbeat_task = asyncio.create_task(beat())
-    tool_task = asyncio.create_task(
-        execute_tool(step_type, step_input, context, payments_url=settings.mock_payments_url)
-    )
+    if step_type == "support_agent":
+        from durable_agent_runtime.agent.runner import run_support_agent
+
+        tool_task = asyncio.create_task(
+            run_support_agent(
+                step_input,
+                context,
+                executor_id=executor_id,
+                lease_token=token,
+                sessions=sessions,
+                settings=settings,
+            )
+        )
+    else:
+        tool_task = asyncio.create_task(
+            execute_tool(step_type, step_input, context, payments_url=settings.mock_payments_url)
+        )
     lease_task = asyncio.create_task(lost_lease.wait())
     outcome: dict[str, object] | None = None
     failure: PermanentToolError | None = None
@@ -99,6 +113,8 @@ async def execute_attempt(
             outcome = await tool_task
         except PermanentToolError as exc:
             failure = exc
+        except LostLease:
+            return "lost_lease"
         except TransientToolError:
             transient = True
             logger.warning(

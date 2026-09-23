@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     recovery_scan_interval_seconds: float = Field(default=1, gt=0)
     mock_payments_url: str = "http://localhost:8001"
     executor_drain_seconds: float = Field(default=30, gt=0)
+    agent_provider: str = "ollama"
+    ollama_base_url: str = "http://host.docker.internal:11434"
+    ollama_model: str = "qwen2.5:3b"
+    model_timeout_seconds: float = Field(default=90, gt=0)
+    model_max_attempts: int = Field(default=3, ge=1)
+    agent_max_turns: int = Field(default=8, ge=1)
 
     @model_validator(mode="after")
     def heartbeat_before_expiry(self) -> "Settings":

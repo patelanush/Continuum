@@ -48,6 +48,10 @@ class DockerController:
             "RECOVERY_SCAN_INTERVAL_SECONDS": "0.2",
             "OUTBOX_POLL_INTERVAL": "0.1",
             "OUTBOX_PUBLISH_LEASE_SECONDS": "11",
+            "AGENT_PROVIDER": "fake",
+            "MODEL_TIMEOUT_SECONDS": "5",
+            "MODEL_MAX_ATTEMPTS": "3",
+            "AGENT_MAX_TURNS": "8",
             "FAULTLAB_DISPATCHER_PAUSE_AFTER_ACK": "0",
             "FAULTLAB_PAUSE_AFTER_CLAIM": "0",
         }

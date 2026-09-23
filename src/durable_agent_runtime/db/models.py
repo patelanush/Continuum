@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     desc,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -22,8 +23,12 @@ from sqlalchemy.sql import func
 
 from durable_agent_runtime.db.base import Base
 from durable_agent_runtime.domain.enums import (
+    AgentRunStatus,
+    AgentToolCallStatus,
+    AgentTurnStatus,
     EntityType,
     ExecutionAttemptStatus,
+    ModelCallStatus,
     StepStatus,
     WorkflowStatus,
 )
@@ -33,7 +38,11 @@ def enum_values(
     enum_class: type[WorkflowStatus]
     | type[StepStatus]
     | type[EntityType]
-    | type[ExecutionAttemptStatus],
+    | type[ExecutionAttemptStatus]
+    | type[AgentRunStatus]
+    | type[AgentTurnStatus]
+    | type[ModelCallStatus]
+    | type[AgentToolCallStatus],
 ) -> list[str]:
     return [item.value for item in enum_class]
 
@@ -310,4 +319,154 @@ class ExecutionAttempt(TimestampMixin, Base):
             postgresql_where=status == ExecutionAttemptStatus.RUNNING,
         ),
         Index("ix_execution_attempts_workflow_id", workflow_id),
+    )
+
+
+class AgentRun(TimestampMixin, Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workflow_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False
+    )
+    step_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[AgentRunStatus] = mapped_column(
+        Enum(
+            AgentRunStatus,
+            name="agent_run_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+    )
+    agent_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    model: Mapped[str] = mapped_column(String(200), nullable=False)
+    system_prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    max_turns: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_turn_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    final_response: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("step_id", name="uq_agent_runs_step_id"),
+        CheckConstraint("max_turns >= 1", name="agent_run_max_turns_positive"),
+        CheckConstraint("current_turn_number >= 1", name="agent_run_turn_positive"),
+        Index("ix_agent_runs_workflow_id", workflow_id),
+    )
+
+
+class AgentTurn(TimestampMixin, Base):
+    __tablename__ = "agent_turns"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    agent_run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[AgentTurnStatus] = mapped_column(
+        Enum(
+            AgentTurnStatus,
+            name="agent_turn_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+    )
+    model_request: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    model_request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    decision_type: Mapped[str | None] = mapped_column(String(30))
+    final_response: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("agent_run_id", "turn_number", name="uq_agent_turns_run_number"),
+        CheckConstraint("turn_number >= 1", name="agent_turn_number_positive"),
+        Index("ix_agent_turns_run_number", agent_run_id, turn_number),
+    )
+
+
+class ModelCall(TimestampMixin, Base):
+    __tablename__ = "model_calls"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    agent_turn_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("agent_turns.id", ondelete="CASCADE"), nullable=False
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[ModelCallStatus] = mapped_column(
+        Enum(
+            ModelCallStatus,
+            name="model_call_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    model: Mapped[str] = mapped_column(String(200), nullable=False)
+    request: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    validated_decision: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("agent_turn_id", "attempt_number", name="uq_model_calls_turn_attempt"),
+        CheckConstraint("attempt_number >= 1", name="model_call_attempt_positive"),
+        Index("ix_model_calls_turn_attempt", agent_turn_id, attempt_number),
+    )
+
+
+class AgentToolCall(TimestampMixin, Base):
+    __tablename__ = "agent_tool_calls"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    agent_run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    agent_turn_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("agent_turns.id", ondelete="CASCADE"), nullable=False
+    )
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    arguments_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[AgentToolCallStatus] = mapped_column(
+        Enum(
+            AgentToolCallStatus,
+            name="agent_tool_call_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+    )
+    operation_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    tool_semantics: Mapped[str] = mapped_column(String(40), nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("agent_turn_id", name="uq_agent_tool_calls_turn_id"),
+        UniqueConstraint("operation_id", name="uq_agent_tool_calls_operation_id"),
+        Index("ix_agent_tool_calls_run_id", agent_run_id),
     )

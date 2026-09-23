@@ -12,6 +12,7 @@ from sqlalchemy import func, select, update
 
 from durable_agent_runtime.db.models import ConsumedEvent, ExecutionAttempt
 from durable_agent_runtime.events import DEAD_LETTER_TOPIC, STEP_READY_TOPIC, StepReadyEvent
+from durable_agent_runtime.faultlab import agent_scenarios
 from durable_agent_runtime.faultlab.assertions import classify_workflow
 from durable_agent_runtime.faultlab.models import TrialResult
 from durable_agent_runtime.faultlab.runtime import FaultLabRuntime, wait_for
@@ -762,12 +763,61 @@ SCENARIOS: dict[str, Scenario] = {
             "Intentionally unsafe harness uses a new key on retry",
             unsafe_refund_retry,
         ),
+        Scenario(
+            "agent-model-timeout",
+            "Failed model call is recorded before retry",
+            agent_scenarios.model_timeout,
+        ),
+        Scenario(
+            "agent-malformed-output",
+            "Malformed decision cannot create a tool call",
+            agent_scenarios.malformed_output,
+        ),
+        Scenario(
+            "agent-crash-after-decision",
+            "SIGKILL after durable refund decision",
+            agent_scenarios.crash_after_decision,
+            exclusive=True,
+        ),
+        Scenario(
+            "agent-crash-after-side-effect",
+            "SIGKILL after refund commit before tool checkpoint",
+            agent_scenarios.crash_after_side_effect,
+            exclusive=True,
+        ),
+        Scenario(
+            "agent-crash-after-tool-result",
+            "SIGKILL after durable tool result",
+            agent_scenarios.crash_after_tool_result,
+            exclusive=True,
+        ),
+        Scenario(
+            "agent-crash-after-final",
+            "SIGKILL after durable final answer",
+            agent_scenarios.crash_after_final,
+            exclusive=True,
+        ),
+        Scenario(
+            "agent-max-turn-limit",
+            "Bounded model/tool loop fails safely",
+            agent_scenarios.max_turns,
+        ),
+        Scenario(
+            "agent-unknown-tool",
+            "Unknown model-selected tool fails closed",
+            agent_scenarios.unknown_tool,
+        ),
     )
 }
 
 
 CAMPAIGNS: dict[str, dict[str, int]] = {
-    "smoke": {name: 1 for name in SCENARIOS if name != "unsafe-refund-retry-baseline"},
+    "smoke": {
+        name: 1
+        for name in SCENARIOS
+        if name != "unsafe-refund-retry-baseline" and not name.startswith("agent-")
+    },
+    "ai-smoke": {name: 1 for name in SCENARIOS if name.startswith("agent-")},
     "side-effects": {
         "executor-crash-after-side-effect": 5,
         "external-response-lost-after-side-effect": 20,

@@ -318,3 +318,43 @@ boundary for ownership without a Phase 3 need.
 **Reason:** Aggregate percentages must be reproducible from raw failures, not hand-written. Thousands of container faults on every push would waste free CI minutes and introduce environmental noise.
 
 **Tradeoff:** Timing will vary by machine and local single-broker topology. A clean local campaign is evidence for this configuration, not a production-scale reliability bound.
+
+## Phase 5: agent inside an existing workflow step
+
+**Decision:** Run `support_agent` under an ordinary leased execution attempt. Persist one AgentRun per step, with numbered AgentTurns, ModelCalls, and AgentToolCalls.
+
+**Reason:** Kafka scheduling, attempt recovery, heartbeat, cancellation fencing, and workflow progression already have durable semantics. A second agent workflow engine would duplicate those correctness boundaries. The four agent tables retain nondeterministic decisions and sub-operations across outer-attempt replacement.
+
+**Tradeoff:** The current agent is sequential and one tool action per turn. There are no parallel tool calls, DAGs, long-term memory, or arbitrary user-defined agents.
+
+## Persist the decision before performing its tool
+
+**Decision:** Commit a validated structured model decision and Continuum-generated tool-call identity in the same PostgreSQL transaction. Never replace a committed turn decision. Generate `continuum:agent-tool:<tool_call_id>` once and reuse it across outer attempts.
+
+**Reason:** A restarted model could choose a different action for the same context. Re-running a committed decision or creating a new refund key could duplicate external effects. Provider-generated tool IDs are not a reliable application identity.
+
+**Tradeoff:** Inference that completed but was not persisted may be lost and repeated, possibly with a different answer. No exactly-once model-inference claim is made. A tool without a trustworthy idempotency/reconciliation contract is still unsafe to retry automatically.
+
+## Short fenced agent checkpoints and reconstructed context
+
+**Decision:** Record model-call intent, invoke Ollama outside a DB transaction, commit the accepted decision, execute a durable tool outside a DB transaction, then commit its result and next turn. Every mutation verifies the outer database-time lease token. Reconstruct each model request from persisted input/turns/results and the run's source-controlled prompt version; save the exact normalized request and SHA-256 hash.
+
+**Reason:** Long model/tool I/O must not hold row locks. Fencing prevents a stale executor from writing a late result. Persisted context and prompt version make a replacement independent of in-memory conversation history or a changed default prompt.
+
+**Tradeoff:** More short transactions and durable rows are required. Context is not compressed in Phase 5; long-run context growth is deferred.
+
+## Strict one-action decisions and a closed tool allowlist
+
+**Decision:** Accept only schema-validated `tool_call` or `final` JSON. Validate selected tools with typed arguments; unknown names and extra arguments fail closed. Allow only read-only policy lookup and keyed mock refund for the support agent.
+
+**Reason:** Parsing prose or allowing arbitrary URLs/commands would turn a malformed or hostile model response into an unsafe side effect. One action per turn keeps checkpoint and replay identity unambiguous.
+
+**Tradeoff:** A compact local model may need a prompt correction or bounded retry to produce valid tool arguments. This is visible in failed ModelCalls rather than silently coerced.
+
+## Bounded local providers, no paid API dependency
+
+**Decision:** Use a scripted FakeModelProvider in CI/FaultLab and an Ollama `/api/chat` JSON-schema provider for real local inference. Record timeout/malformed failures, retry only within `MODEL_MAX_ATTEMPTS`, and stop nonfinal loops at `AGENT_MAX_TURNS`. Ollama 400/404 configuration errors fail permanently.
+
+**Reason:** Deterministic failure-boundary tests cannot depend on model sampling or multi-gigabyte downloads. A local provider proves the adapter path without paid credentials, while structured validation keeps the durable contract provider-independent.
+
+**Tradeoff:** A fake-provider test does not prove model quality, and a single compact local-model smoke does not prove general tool-selection reliability. Local inference has hardware/electricity costs even without paid API charges.

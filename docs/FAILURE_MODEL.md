@@ -1,4 +1,4 @@
-# Failure Model through Phase 4
+# Failure Model through Phase 5
 
 Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a transactional outbox, an idempotent inbox, and durable leased execution attempts. It does **not** promise exactly-once distributed or arbitrary external execution.
 
@@ -17,6 +17,12 @@ Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a 
 - **Transaction rollback:** Inbox + initial scheduling and attempt finalization + step/audit/outbox roll back as units. No Kafka offset is committed before initial scheduling commits.
 - **Repeated, injected fault boundaries:** FaultLab exercises container SIGKILL before execution, during pure work, and after an independently committed refund; process pause without heartbeats; broker/database outages; ack-before-publish-finalization dispatcher death; Kafka replay/missed offset acknowledgement; malformed messages; stale fencing; and concurrent recovery. Every run preserves raw per-trial evidence and independently checks refund count.
 - **Outbox broker-I/O lock duration:** Phase 4 moved Kafka publication outside PostgreSQL row-lock transactions. Expiring, fenced outbox claims keep crashes recoverable; consumer dedupe still handles re-publication.
+- **Model timeout and malformed structured output:** Every model attempt is recorded. Invalid output cannot materialize a tool; bounded retries may produce a later valid decision. Unsupported model/request configuration fails permanently.
+- **Crash after a committed model decision:** The accepted AgentTurn decision and AgentToolCall identity are durable together. A replacement does not re-infer that turn, even if the model would choose differently.
+- **Crash before decision persistence:** The interrupted ModelCall is retained as failed. Inference may run again and return a different answer; no action was authorized from the uncommitted response.
+- **Crash after agent refund side effect:** The tool call and operation ID precede HTTP I/O. Retry uses the same key; the independent payments service returns the original refund. A real FaultLab executor SIGKILL after payment commit verifies one refund and no reinference of the persisted refund turn.
+- **Crash after persisted tool result or final answer:** The next turn or final AgentRun result is resumed, not recomputed. Real FaultLab container crashes exercise both windows.
+- **Unknown tool and unbounded loop:** The tool allowlist rejects unknown names and arguments; model attempts and agent turns have configured finite limits.
 
 ## Boundary table
 
@@ -38,7 +44,7 @@ Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a 
 - A transient payment/DB outage can lead to lease expiry and repeated **safe** calls. Max attempts are bounded, but there is no general retry/backoff policy, circuit breaker, or tool-specific reconciliation yet.
 - Cancellation fences durable finalization but cannot guarantee that an already-sent external HTTP request was cancelled before its effect. Human approval and compensating actions remain future work.
 - Kafka is one local KRaft broker with a named volume, not broker HA or disaster recovery. Multi-region recovery is not implemented.
-- LLM/model failures, arbitrary tool timeouts, code sandbox crashes, human approval, Redis coordination, OpenTelemetry, and Kubernetes remain planned. FaultLab validates the current supported operations, not these absent capabilities.
+- Broader model-provider outages beyond bounded local Ollama retries, arbitrary tool timeouts/reconciliation, code sandbox crashes, human approval, Redis coordination, OpenTelemetry, and Kubernetes remain planned. FaultLab validates supported operations, not these absent capabilities.
 - A database interruption around a commit can leave a caller uncertain whether that commit succeeded. Durable rereads and idempotent commands/keys limit harm; arbitrary external reconciliation remains future work.
 - A continuously failing external service can exhaust `max_attempts` and correctly fail a workflow with no refund. FaultLab treats that as a **correct bounded failure**, not a recovered workflow.
 - Graceful executor restart may finish one in-flight attempt while heartbeating; SIGKILL/pause scenarios are separate. FaultLab originally expected two attempts from a graceful restart and corrected that harness assumption rather than altering runtime behavior.
@@ -46,3 +52,11 @@ Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a 
 - FaultLab's first concurrent-recovery experiment raced a background scheduler in addition to its intended two scans. It now stops that scheduler for the controlled two-session race. This was an experiment-isolation defect, not a duplicate-attempt runtime bug.
 
 The final clean-revision [FaultLab campaign](../benchmarks/results/phase4-summary.md) classified 5,075/5,075 Continuum trials correctly, including real process and infrastructure faults, with zero duplicate or lost refunds among 510 trials expecting one. Its 100 separate unsafe retry controls each duplicated a refund. This is evidence for the supported local operations and one-broker topology, not a guarantee for arbitrary APIs, production traffic, or untested failure combinations.
+
+## Phase 5 unresolved boundaries
+
+- Provider-side inference may have completed but its response can disappear before the PostgreSQL decision commit. A replacement may call the model again and get a different response. Continuum guarantees replay of **persisted** decisions, not exactly-once or deterministic inference.
+- An arbitrary non-idempotent tool cannot be made safe by the agent tables. The allowlist currently contains only a deterministic read and the mock payment API's idempotency-key contract. Idempotency-key retention and real payment reconciliation are outside this local demonstration.
+- Cancellation fences future checkpoints and prevents a new model call after the workflow is cancelled, but cannot undo an already-sent HTTP refund. Human approval, compensation, and tool-specific cancellation are deferred.
+- Prompt injection defense, API authentication/authorization, sensitive-data retention, sandboxed code execution, coding-agent filesystem effects, multi-agent coordination, context compression, a provider outage across all local model capacity, and broker HA are not solved.
+- Phase 4's 5,075-trial Continuum result predates Phase 5. Phase 5 AI smoke results are separate and must not be silently added to that reliability denominator.

@@ -1,4 +1,4 @@
-# Architecture through Phase 4
+# Architecture through Phase 5
 
 ## Authority and layers
 
@@ -43,3 +43,28 @@ FaultLab is an external harness, not a new workflow-state authority. It uses an 
 Scenario cleanup and campaign exclusivity matter: container-kill, Kafka-stop, PostgreSQL-stop, and scheduler-race trials run serially; workflow-isolated baseline, duplicate-event, and external-response trials can run concurrently at a configured cap. The deliberately unsafe refund comparison uses two different idempotency keys only in the harness, never as a runtime option. FaultLab-only executor/dispatcher hooks are gated by `APP_ENV=faultlab`; mock-payment failure modes are rejected otherwise.
 
 The harness checks PostgreSQL state and the *independent* payments service. A succeeded workflow with a second refund, missing refund, duplicate audit edge, duplicate logical outbox event, unexpected active attempt, or incorrect sequential step position is a failed trial. Some faults (SIGKILL, `docker pause`, Kafka/PostgreSQL outage) are real process/container failures. Stale-token and concurrent-scheduler tests intentionally force expiry with database time and run genuine concurrent PostgreSQL transactions. The distinction is retained in each scenario's name and documentation.
+
+## Phase 5: nondeterministic reasoning inside a durable step
+
+An event consumer still creates only a `PENDING` outer attempt. A leased executor claims that attempt and dispatches `support_agent` to the agent runner. The outer heartbeat continues during Ollama generation and HTTP tool calls. No provider or tool call holds an open Continuum database transaction. The agent checkpoints are additional short, fenced transactions inside the already-established reserve/execute/finalize boundary.
+
+```mermaid
+flowchart LR
+  K[Kafka step.ready] --> I[Inbox and outer attempt]
+  I --> E[Leased executor]
+  E --> R[(AgentRun and AgentTurn)]
+  R --> MC[(ModelCall)]
+  MC -->|commit valid decision| TC[(AgentToolCall)]
+  TC -->|HTTP, no Continuum transaction| MP[Mock payments]
+  MP -->|same operation key on retry| TC
+  TC -->|commit result and next turn| R
+  R -->|persisted final| F[Outer fenced finalization]
+```
+
+`agent_runs.step_id` is unique, so replacement outer attempts resume one logical agent run. `(agent_run_id,turn_number)` and `(agent_turn_id,attempt_number)` make turn/call numbering durable. One tool call per turn is enforced with a unique `agent_turn_id`. The model request sent on every call, its canonical SHA-256 hash, and failed-call evidence are stored. Accepted decisions are written once under row lock and are not overwritten. Tool name, arguments, argument hash, UUID-derived Continuum operation ID, and result survive process death. The support prompt text is looked up by the run's stored version rather than silently changing mid-run after a deployment.
+
+The critical commit is **ModelCall success + accepted AgentTurn decision + AgentToolCall identity**. Only afterward may the executor call a tool. Tool result + turn completion + next turn are a second atomic checkpoint. Every checkpoint validates the live outer attempt through the same database-time lease and token fencing used for finalization. An old executor may still have an in-flight model/HTTP response, but it cannot commit it after lease loss.
+
+The model response generated before a decision commit can be lost and re-generated differently after a crash. No external action has been authorized from that uncommitted response. Once a decision is committed, replay uses it without model inference for that turn. A refund committed externally but not checkpointed internally is retried with the *same* `continuum:agent-tool:<tool_call_id>` key and is deduplicated by the independent payment service. This is a keyed side-effect guarantee for the two allowlisted tools, **not** exactly-once model inference or arbitrary tool execution.
+
+The read-only `/agent` trajectory API exposes validated decisions and summaries, not raw provider responses. API authentication and sensitive-data retention policy remain production concerns; this is a local demonstration service. More agent details and examples are in [AGENTS.md](AGENTS.md).

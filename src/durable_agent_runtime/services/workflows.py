@@ -7,15 +7,23 @@ from sqlalchemy import func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from durable_agent_runtime.db.models import (
+    AgentRun,
+    AgentToolCall,
+    AgentTurn,
     ExecutionAttempt,
+    ModelCall,
     OutboxEvent,
     StateTransition,
     Workflow,
     WorkflowStep,
 )
 from durable_agent_runtime.domain.enums import (
+    AgentRunStatus,
+    AgentToolCallStatus,
+    AgentTurnStatus,
     EntityType,
     ExecutionAttemptStatus,
+    ModelCallStatus,
     StepStatus,
     WorkflowStatus,
 )
@@ -26,11 +34,21 @@ from durable_agent_runtime.domain.errors import (
     WorkflowNotFound,
 )
 from durable_agent_runtime.domain.state_machine import (
+    validate_agent_run_transition,
+    validate_agent_tool_call_transition,
+    validate_agent_turn_transition,
     validate_attempt_transition,
+    validate_model_call_transition,
     validate_step_transition,
     validate_workflow_transition,
 )
 from durable_agent_runtime.events import STEP_READY_TOPIC
+from durable_agent_runtime.schemas.agents import (
+    AgentRunTrace,
+    AgentToolSummary,
+    AgentTurnTrace,
+    ModelCallSummary,
+)
 from durable_agent_runtime.schemas.workflows import WorkflowCreate
 
 logger = logging.getLogger(__name__)
@@ -213,7 +231,68 @@ class WorkflowService:
         step.completed_at = datetime.now(UTC)
         self._transition_workflow(workflow, WorkflowStatus.FAILED, reason=reason)
         workflow.completed_at = datetime.now(UTC)
+        await self._close_agent_runs(workflow.id, AgentRunStatus.FAILED, error_code=error_code)
         return workflow
+
+    async def _close_agent_runs(
+        self, workflow_id: UUID, target: AgentRunStatus, *, error_code: str
+    ) -> None:
+        runs = list(
+            await self.session.scalars(
+                select(AgentRun).where(AgentRun.workflow_id == workflow_id).with_for_update()
+            )
+        )
+        for run in runs:
+            if run.status not in {AgentRunStatus.PENDING, AgentRunStatus.RUNNING}:
+                continue
+            validate_agent_run_transition(run.status, target)
+            run.status = target
+            run.error_code = error_code
+            run.completed_at = datetime.now(UTC)
+            turns = list(
+                await self.session.scalars(
+                    select(AgentTurn)
+                    .where(AgentTurn.agent_run_id == run.id)
+                    .order_by(AgentTurn.turn_number)
+                    .with_for_update()
+                )
+            )
+            for turn in turns:
+                if turn.status in {AgentTurnStatus.PENDING_MODEL, AgentTurnStatus.TOOL_PENDING}:
+                    validate_agent_turn_transition(turn.status, AgentTurnStatus.FAILED)
+                    turn.status = AgentTurnStatus.FAILED
+                    turn.completed_at = datetime.now(UTC)
+            calls = list(
+                await self.session.scalars(
+                    select(ModelCall)
+                    .join(AgentTurn, ModelCall.agent_turn_id == AgentTurn.id)
+                    .where(
+                        AgentTurn.agent_run_id == run.id,
+                        ModelCall.status == ModelCallStatus.RUNNING,
+                    )
+                    .order_by(ModelCall.id)
+                    .with_for_update()
+                )
+            )
+            for call in calls:
+                validate_model_call_transition(call.status, ModelCallStatus.FAILED)
+                call.status = ModelCallStatus.FAILED
+                call.error_code = error_code
+                call.completed_at = datetime.now(UTC)
+            tools = list(
+                await self.session.scalars(
+                    select(AgentToolCall)
+                    .where(AgentToolCall.agent_run_id == run.id)
+                    .order_by(AgentToolCall.id)
+                    .with_for_update()
+                )
+            )
+            for tool in tools:
+                if tool.status == AgentToolCallStatus.PENDING:
+                    validate_agent_tool_call_transition(tool.status, AgentToolCallStatus.FAILED)
+                    tool.status = AgentToolCallStatus.FAILED
+                    tool.error_code = error_code
+                    tool.completed_at = datetime.now(UTC)
 
     async def cancel_workflow(self, workflow_id: UUID, *, reason: str | None = None) -> Workflow:
         async with self.session.begin():
@@ -245,6 +324,9 @@ class WorkflowService:
                 validate_attempt_transition(attempt.status, ExecutionAttemptStatus.CANCELLED)
                 attempt.status = ExecutionAttemptStatus.CANCELLED
                 attempt.completed_at = datetime.now(UTC)
+            await self._close_agent_runs(
+                workflow_id, AgentRunStatus.CANCELLED, error_code="WORKFLOW_CANCELLED"
+            )
         logger.info("workflow_cancelled workflow_id=%s", workflow_id)
         return workflow
 
@@ -265,6 +347,94 @@ class WorkflowService:
             .order_by(ExecutionAttempt.created_at, ExecutionAttempt.attempt_number)
         )
         return list(rows)
+
+    async def get_agent_trace(self, workflow_id: UUID) -> list[AgentRunTrace]:
+        await self.get_workflow(workflow_id)
+        runs = list(
+            await self.session.scalars(
+                select(AgentRun)
+                .where(AgentRun.workflow_id == workflow_id)
+                .order_by(AgentRun.created_at)
+            )
+        )
+        traces: list[AgentRunTrace] = []
+        for run in runs:
+            turns = list(
+                await self.session.scalars(
+                    select(AgentTurn)
+                    .where(AgentTurn.agent_run_id == run.id)
+                    .order_by(AgentTurn.turn_number)
+                )
+            )
+            turn_traces: list[AgentTurnTrace] = []
+            for turn in turns:
+                calls = list(
+                    await self.session.scalars(
+                        select(ModelCall)
+                        .where(ModelCall.agent_turn_id == turn.id)
+                        .order_by(ModelCall.attempt_number)
+                    )
+                )
+                tool = await self.session.scalar(
+                    select(AgentToolCall).where(AgentToolCall.agent_turn_id == turn.id)
+                )
+                turn_traces.append(
+                    AgentTurnTrace(
+                        id=turn.id,
+                        turn_number=turn.turn_number,
+                        status=turn.status,
+                        model_request_hash=turn.model_request_hash,
+                        decision=turn.decision,
+                        final_response=turn.final_response,
+                        model_calls=[
+                            ModelCallSummary(
+                                id=call.id,
+                                attempt_number=call.attempt_number,
+                                status=call.status,
+                                provider=call.provider,
+                                model=call.model,
+                                request_hash=call.request_hash,
+                                prompt_tokens=call.prompt_tokens,
+                                completion_tokens=call.completion_tokens,
+                                latency_ms=call.latency_ms,
+                                error_code=call.error_code,
+                            )
+                            for call in calls
+                        ],
+                        tool_call=AgentToolSummary(
+                            id=tool.id,
+                            tool_name=tool.tool_name,
+                            arguments=tool.arguments,
+                            arguments_hash=tool.arguments_hash,
+                            status=tool.status,
+                            operation_id=tool.operation_id,
+                            tool_semantics=tool.tool_semantics,
+                            result=tool.result,
+                            error_code=tool.error_code,
+                        )
+                        if tool
+                        else None,
+                    )
+                )
+            traces.append(
+                AgentRunTrace(
+                    id=run.id,
+                    step_id=run.step_id,
+                    status=run.status,
+                    agent_type=run.agent_type,
+                    provider=run.provider,
+                    model=run.model,
+                    system_prompt_version=run.system_prompt_version,
+                    max_turns=run.max_turns,
+                    current_turn_number=run.current_turn_number,
+                    final_response=run.final_response,
+                    error_code=run.error_code,
+                    created_at=run.created_at,
+                    completed_at=run.completed_at,
+                    turns=turn_traces,
+                )
+            )
+        return traces
 
     async def _lock_workflow(self, workflow_id: UUID) -> tuple[Workflow, list[WorkflowStep]]:
         workflow = await self.session.scalar(

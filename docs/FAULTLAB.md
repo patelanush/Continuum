@@ -80,3 +80,20 @@ The clean-revision experiment [`b191853c-c1d8-4e37-91a2-a469f719567c`](../benchm
 - Whole mixed-campaign throughput was **1.637886 succeeded workflows/second** over 3,037.452 seconds. This includes serialized container stops/restarts and deliberately timed lease expiries; it is **not** steady-state capacity. The high-volume noop and replay segments completed much faster than the physical-fault segments.
 
 Scenario counts and exact outcomes appear in the generated report; notably real post-refund SIGKILL was 10/10 correct, Kafka outage 3/3, PostgreSQL interruption 2/2, dispatcher post-ack SIGKILL 5/5, and concurrent recovery 10/10. No Continuum correctness defect appeared in the final clean-revision run. Earlier dirty-revision harness-isolation mistakes and the Kafka topic-init race are documented above; none of their failed trials was folded into these percentages. Raw evidence remains at `artifacts/faultlab/b191853c-c1d8-4e37-91a2-a469f719567c/` in this workspace and is ignored by Git; only derived summaries are committed.
+
+## Phase 5 AI-agent scenarios (separate cohort)
+
+Phase 5 adds an `ai-smoke` campaign of eight scenarios. It does **not** change or merge the official Phase 4 5,075-trial Continuum denominator. The FakeModelProvider is scripted to make model-call faults and choices reproducible; the runtime still uses real PostgreSQL, Kafka, executors, and the independent payments HTTP/PostgreSQL service. Four crash scenarios use real container SIGKILL with FaultLab-gated pauses or a payment post-commit delay. Their correctness assertions additionally inspect AgentRun, turn/model-call/tool-call identities and the external refund by the durable *agent-tool* operation key.
+
+| Scenario | Boundary | Required evidence |
+| --- | --- | --- |
+| `agent-model-timeout` | first fake invocation times out | Failed ModelCall retained; later valid decision; one refund |
+| `agent-malformed-output` | first response is invalid JSON shape | No tool from invalid response; later valid decision |
+| `agent-crash-after-decision` | refund decision and tool identity committed, no HTTP yet | Real SIGKILL; same turn/model call/tool ID; one refund |
+| `agent-crash-after-side-effect` | mock refund committed, tool result not committed | Poll external refund then real SIGKILL; replacement uses same operation ID; one refund |
+| `agent-crash-after-tool-result` | tool result and next turn committed | Real SIGKILL; tool is not executed again |
+| `agent-crash-after-final` | final answer committed, outer attempt still RUNNING | Real SIGKILL; no new inference; outer step succeeds |
+| `agent-max-turn-limit` | model keeps selecting policy lookup | Bounded `FAILED`, `MAX_AGENT_TURNS_EXCEEDED` |
+| `agent-unknown-tool` | model selects `shell` | No tool call materialized; bounded failure |
+
+Run `make faultlab-ai-smoke` or `uv run continuum-faultlab campaign ai-smoke --seed 42`. These are small boundary demonstrations, not another 5,000-trial reliability estimate. The real Ollama smoke is a separate optional test, excluded from CI; fake-provider correctness does not prove general model quality. Phase 5 fault hooks are environment-gated (`APP_ENV=faultlab`) and unavailable through public APIs.

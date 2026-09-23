@@ -37,8 +37,8 @@ packages = ["src/durable_agent_runtime"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--strict-markers --cov=durable_agent_runtime --cov-report=term-missing --cov-fail-under=85"
-markers = ["integration: requires PostgreSQL", "kafka: requires real Kafka", "faultlab: requires isolated Docker Compose stack"]
+addopts = "--strict-markers -m 'not ollama' --cov=durable_agent_runtime --cov-report=term-missing --cov-fail-under=85"
+markers = ["integration: requires PostgreSQL", "kafka: requires real Kafka", "faultlab: requires isolated Docker Compose stack", "ollama: optional real local Ollama model"]
 
 [tool.coverage.run]
 branch = true
