@@ -358,6 +358,92 @@ async def test_invalid_python_model_patch_retries_before_any_file_effect() -> No
             await docker("volume", "rm", volume_name)
 
 
+async def test_premature_final_is_recorded_as_failed_model_call_then_retried() -> None:
+    script = fixture_script()
+    script["2"] = [
+        {"type": "final", "response": "The fix is complete."},
+        script["2"][0],
+    ]
+    workflow_id, step_id = await create_scheduled(
+        step_count=1,
+        step_type="coding_agent",
+        step_input={**coding_input(), "fake_script": script},
+    )
+    attempt = await claim(lease_seconds=60)
+    task = asyncio.create_task(
+        execute_attempt(
+            attempt, executor_id="executor-a", sessions=TestSession, settings=settings()
+        )
+    )
+    volume_name: str | None = None
+    try:
+        approval = await wait_for_approval(workflow_id)
+        async with TestSession() as session:
+            workspace = await session.scalar(
+                select(CodingWorkspace).where(CodingWorkspace.step_id == step_id)
+            )
+            assert workspace is not None
+            volume_name = workspace.volume_name
+            calls = list(await session.scalars(select(ModelCall).order_by(ModelCall.created_at)))
+            assert len(calls) == 8
+            failed = [call for call in calls if call.status.value == "FAILED"]
+            assert len(failed) == 1
+            assert failed[0].error_detail is not None
+            assert "Premature final decision" in failed[0].error_detail
+            assert await session.scalar(select(func.count()).select_from(AgentToolCall)) == 6
+        async with TestSession() as session:
+            await ApprovalService(session).decide(approval.id, ApprovalStatus.APPROVED)
+        assert await asyncio.wait_for(task, timeout=25) == "succeeded"
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if volume_name is not None:
+            await docker("volume", "rm", volume_name)
+
+
+async def test_repeated_premature_final_fails_without_approval_or_commit() -> None:
+    workflow_id, step_id = await create_scheduled(
+        step_count=1,
+        step_type="coding_agent",
+        step_input={
+            **coding_input(),
+            "fake_script": {"1": [{"type": "final", "response": "Already fixed."}]},
+        },
+    )
+    attempt = await claim(lease_seconds=60)
+    volume_name: str | None = None
+    try:
+        assert (
+            await asyncio.wait_for(
+                execute_attempt(
+                    attempt,
+                    executor_id="executor-a",
+                    sessions=TestSession,
+                    settings=settings(),
+                ),
+                timeout=30,
+            )
+            == "failed"
+        )
+        async with TestSession() as session:
+            workspace = await session.scalar(
+                select(CodingWorkspace).where(CodingWorkspace.step_id == step_id)
+            )
+            assert workspace is not None and workspace.status == WorkspaceStatus.FAILED
+            volume_name = workspace.volume_name
+            agent_run = await session.scalar(select(AgentRun).where(AgentRun.step_id == step_id))
+            assert agent_run is not None and agent_run.status.value == "FAILED"
+            assert await session.scalar(select(func.count()).select_from(ModelCall)) == 3
+            assert await session.scalar(select(func.count()).select_from(ApprovalRequest)) == 0
+            assert await session.scalar(select(func.count()).select_from(AgentToolCall)) == 0
+            workflow = await WorkflowService(session).get_workflow(workflow_id)
+            assert workflow.status == WorkflowStatus.FAILED
+    finally:
+        if volume_name is not None:
+            await docker("volume", "rm", volume_name)
+
+
 async def test_patch_effect_survives_outer_attempt_replacement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

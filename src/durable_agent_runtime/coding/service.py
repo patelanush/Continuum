@@ -291,6 +291,43 @@ class CodingService:
             validate_workspace_transition(workspace.status, WorkspaceStatus.FAILED)
             workspace.status = WorkspaceStatus.FAILED
 
+    async def _approval_evidence(
+        self, workspace_id: UUID
+    ) -> tuple[SandboxCommand, WorkspaceCheckpoint]:
+        passing_test = await self.session.scalar(
+            select(SandboxCommand)
+            .where(
+                SandboxCommand.workspace_id == workspace_id,
+                SandboxCommand.command_type == "run_tests",
+                SandboxCommand.status == CommandStatus.SUCCEEDED,
+                SandboxCommand.exit_code == 0,
+            )
+            .order_by(SandboxCommand.started_at.desc())
+            .limit(1)
+        )
+        if passing_test is None:
+            raise PermanentToolError("TESTS_NOT_PASSED", "No passing sandbox test record")
+        checkpoint = await self.session.scalar(
+            select(WorkspaceCheckpoint)
+            .where(
+                WorkspaceCheckpoint.workspace_id == workspace_id,
+                WorkspaceCheckpoint.reason == "PATCH_APPLIED",
+            )
+            .order_by(WorkspaceCheckpoint.sequence_number.desc())
+            .limit(1)
+        )
+        if checkpoint is None:
+            raise PermanentToolError("NO_CODING_CHANGE", "No durable patch checkpoint")
+        if passing_test.started_at < checkpoint.created_at:
+            raise PermanentToolError("TESTS_STALE", "Tests predate the latest patch")
+        return passing_test, checkpoint
+
+    async def verify_ready_for_final(self, workspace_id: UUID) -> None:
+        """Reject an unverified model FINAL before it becomes an AgentRun success."""
+        async with self.session.begin():
+            await self._fence()
+            await self._approval_evidence(workspace_id)
+
     async def request_approval(self, workspace_id: UUID, final_response: str) -> UUID:
         async with self.session.begin():
             await self._fence()
@@ -301,32 +338,7 @@ class CodingService:
             )
             if existing is not None:
                 return existing.id
-            passing_test = await self.session.scalar(
-                select(SandboxCommand)
-                .where(
-                    SandboxCommand.workspace_id == workspace_id,
-                    SandboxCommand.command_type == "run_tests",
-                    SandboxCommand.status == CommandStatus.SUCCEEDED,
-                    SandboxCommand.exit_code == 0,
-                )
-                .order_by(SandboxCommand.started_at.desc())
-                .limit(1)
-            )
-            if passing_test is None:
-                raise PermanentToolError("TESTS_NOT_PASSED", "No passing sandbox test record")
-            checkpoint = await self.session.scalar(
-                select(WorkspaceCheckpoint)
-                .where(
-                    WorkspaceCheckpoint.workspace_id == workspace_id,
-                    WorkspaceCheckpoint.reason == "PATCH_APPLIED",
-                )
-                .order_by(WorkspaceCheckpoint.sequence_number.desc())
-                .limit(1)
-            )
-            if checkpoint is None:
-                raise PermanentToolError("NO_CODING_CHANGE", "No durable patch checkpoint")
-            if passing_test.started_at < checkpoint.created_at:
-                raise PermanentToolError("TESTS_STALE", "Tests predate the latest patch")
+            passing_test, _checkpoint = await self._approval_evidence(workspace_id)
             approval_id = uuid4()
             self.session.add(
                 ApprovalRequest(

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from durable_agent_runtime.agent.decisions import DECISION_ADAPTER, ToolDecision
+from durable_agent_runtime.agent.decisions import DECISION_ADAPTER, FinalDecision, ToolDecision
 from durable_agent_runtime.agent.providers import (
     FakeModelProvider,
     ModelProvider,
@@ -230,6 +230,14 @@ async def run_coding_agent(
                     decision = DECISION_ADAPTER.validate_python(result.raw)
                     if isinstance(decision, ToolDecision):
                         validate_coding_arguments(decision.tool_name, decision.arguments)
+                    elif isinstance(decision, FinalDecision):
+                        try:
+                            async with sessions() as session:
+                                await CodingService(
+                                    session, context, executor_id, lease_token
+                                ).verify_ready_for_final(workspace_id)
+                        except PermanentToolError as exc:
+                            raise ValueError(f"Premature final decision: {exc.code}") from exc
                 except ProviderConfigurationError as exc:
                     async with sessions() as session:
                         await AgentService(

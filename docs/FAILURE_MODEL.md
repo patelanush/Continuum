@@ -30,6 +30,7 @@ Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a 
 - **Unexpected workspace divergence or path escape:** Fingerprint/expected-hash mismatch fails closed; a central resolver rejects traversal, absolute host paths, and symlink escapes. Tests and FaultLab cover these controls.
 - **Command timeout:** The sandbox terminates the command process group and returns a timed-out result; no unbounded test command is accepted.
 - **Malformed model-generated Python replacement:** Local Ollama produced an unterminated docstring in a real coding attempt. The first run's sandbox tests caught it and refused approval. Phase 6 now parses Python replacements before decision materialization and again before sandbox write, so syntax-invalid content consumes a bounded failed ModelCall rather than changing the workspace. The invalid-replacement regression test preserves this boundary.
+- **Premature coding final answer:** A local code model returned `final` after only reading the task. Continuum now rejects that decision as a failed ModelCall until a durable patch checkpoint and a later passing sandbox-test record exist. Bounded exhaustion fails both AgentRun and workflow without approval or commit; a scripted retry test proves the model can continue instead.
 
 ## Boundary table
 
