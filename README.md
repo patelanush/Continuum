@@ -110,6 +110,8 @@ uv run continuum-faultlab clean
 
 Phase 5 adds `continuum-faultlab campaign ai-smoke` for model timeout, malformed output, persisted-decision crash, post-refund SIGKILL, persisted-tool-result crash, final-answer crash, turn-limit, and unknown-tool handling. Its results are reported **separately** from the official Phase 4 campaign below.
 
+On clean code commit `afef98d`, the local AI smoke experiment `bd9c0771-28c7-48cc-98c6-ed4c4f58c155` classified **8/8 trials correct**, including four real executor SIGKILL recoveries, with zero duplicate or lost refunds. This is a boundary smoke test, not a statistical reliability estimate. A separate [real Ollama demo record](benchmarks/results/phase5-agent-demo.json) documents one successful `qwen2.5:3b` support workflow: three turns, three model calls, two tool calls, and one refund.
+
 The clean-revision [official campaign](benchmarks/results/phase4-summary.md) recorded **5,175 trials**: 5,075 Continuum trials (2,875 with injected faults) were classified correct, including 510 workflows expecting a refund with **zero duplicate or lost refunds**. The 100 separate, intentionally unsafe retry controls produced 100 duplicate refunds. Recovery-to-success was 2,770/2,770 where required; 100 persistent pre-commit timeout workflows correctly ended `FAILED` with no refund. Replacement-attempt recovery had a measured p95 of **5,330.51 ms** across 547 samples with a five-second test lease. See the [methodology and denominators](docs/FAULTLAB.md). These are local single-broker observations, **not** production-scale reliability guarantees.
 
 ## Tests

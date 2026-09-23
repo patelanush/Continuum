@@ -97,3 +97,5 @@ Phase 5 adds an `ai-smoke` campaign of eight scenarios. It does **not** change o
 | `agent-unknown-tool` | model selects `shell` | No tool call materialized; bounded failure |
 
 Run `make faultlab-ai-smoke` or `uv run continuum-faultlab campaign ai-smoke --seed 42`. These are small boundary demonstrations, not another 5,000-trial reliability estimate. The real Ollama smoke is a separate optional test, excluded from CI; fake-provider correctness does not prove general model quality. Phase 5 fault hooks are environment-gated (`APP_ENV=faultlab`) and unavailable through public APIs.
+
+Clean-code-commit `afef98d` local run `bd9c0771-28c7-48cc-98c6-ed4c4f58c155` recorded 8/8 correct AI trials, four injected SIGKILLs and four recovered workflows, zero duplicate/lost refunds, and zero duplicate workflow transitions. Six workflows succeeded; the max-turn and unknown-tool scenarios correctly failed closed. Raw per-trial JSONL and generated summary remain under ignored `artifacts/faultlab/<experiment-id>/` on the test machine. These eight trials do not alter the Phase 4 campaign's denominator or guarantee future model quality.

@@ -1,0 +1,15 @@
+{
+  "git_commit": "afef98d6df424cc0af3c9fe4de293a2966b0593a",
+  "provider": "ollama",
+  "model": "qwen2.5:3b",
+  "workflow_id": "309fd880-6533-4029-a67e-5df742b24a63",
+  "workflow_status": "SUCCEEDED",
+  "agent_turns": 3,
+  "model_calls": 3,
+  "tool_calls": 2,
+  "refund_count": 1,
+  "final_response_length": 95,
+  "prompt_tokens": 947,
+  "completion_tokens": 146,
+  "elapsed_ms": 56679
+}
