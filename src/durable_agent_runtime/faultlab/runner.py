@@ -188,6 +188,12 @@ def publish_summary(store: ExperimentStore) -> None:
     (destination / "latest.json").write_text(
         json.dumps(latest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    (destination / "phase4-summary.md").write_text(
+    if all(name.startswith("coding-") for name in config.scenario_names):
+        report_name = "phase6-coding-summary.md"
+    elif all(name.startswith("agent-") for name in config.scenario_names):
+        report_name = "phase5-ai-summary.md"
+    else:
+        report_name = "phase4-summary.md"
+    (destination / report_name).write_text(
         (store.directory / "summary.md").read_text(encoding="utf-8"), encoding="utf-8"
     )

@@ -265,6 +265,46 @@ def test_official_publish_derives_compact_summary_from_raw_trials(
     assert published["git_commit"] == configuration.git_commit
 
 
+@pytest.mark.parametrize(
+    ("scenario_name", "report_name"),
+    [
+        ("baseline", "phase4-summary.md"),
+        ("agent-model-timeout", "phase5-ai-summary.md"),
+        ("coding-baseline", "phase6-coding-summary.md"),
+    ],
+)
+def test_publish_keeps_campaign_reports_separate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario_name: str,
+    report_name: str,
+) -> None:
+    configuration = config().model_copy(
+        update={
+            "scenario_names": [scenario_name],
+            "runs_per_scenario": {scenario_name: 1},
+        }
+    )
+    store = ExperimentStore(configuration.experiment_id, root=tmp_path / "raw")
+    store.initialize(configuration)
+    store.append(trial(configuration, scenario=scenario_name))
+    destination = tmp_path / "benchmarks" / "results"
+    destination.mkdir(parents=True)
+    phase4 = destination / "phase4-summary.md"
+    phase4.write_text("historical phase 4 result\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "durable_agent_runtime.faultlab.runner.git_state",
+        lambda: (configuration.git_commit, False),
+    )
+    monkeypatch.setattr("durable_agent_runtime.faultlab.runner.REPO_ROOT", tmp_path)
+
+    publish_summary(store)
+
+    assert (destination / report_name).exists()
+    if scenario_name != "baseline":
+        assert phase4.read_text(encoding="utf-8") == "historical phase 4 result\n"
+
+
 async def test_classification_detects_duplicate_external_effect_and_transition() -> None:
     now = datetime.now(UTC)
     workflow_id, step_id = uuid4(), uuid4()
