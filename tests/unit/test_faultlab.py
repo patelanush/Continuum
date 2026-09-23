@@ -266,11 +266,11 @@ def test_official_publish_derives_compact_summary_from_raw_trials(
 
 
 @pytest.mark.parametrize(
-    ("scenario_name", "report_name"),
+    ("scenario_name", "report_name", "json_name"),
     [
-        ("baseline", "phase4-summary.md"),
-        ("agent-model-timeout", "phase5-ai-summary.md"),
-        ("coding-baseline", "phase6-coding-summary.md"),
+        ("baseline", "phase4-summary.md", "latest.json"),
+        ("agent-model-timeout", "phase5-ai-summary.md", "phase5-ai-summary.json"),
+        ("coding-baseline", "phase6-coding-summary.md", "phase6-coding-summary.json"),
     ],
 )
 def test_publish_keeps_campaign_reports_separate(
@@ -278,6 +278,7 @@ def test_publish_keeps_campaign_reports_separate(
     monkeypatch: pytest.MonkeyPatch,
     scenario_name: str,
     report_name: str,
+    json_name: str,
 ) -> None:
     configuration = config().model_copy(
         update={
@@ -292,6 +293,8 @@ def test_publish_keeps_campaign_reports_separate(
     destination.mkdir(parents=True)
     phase4 = destination / "phase4-summary.md"
     phase4.write_text("historical phase 4 result\n", encoding="utf-8")
+    historical_latest = destination / "latest.json"
+    historical_latest.write_text("historical phase 4 metrics\n", encoding="utf-8")
     monkeypatch.setattr(
         "durable_agent_runtime.faultlab.runner.git_state",
         lambda: (configuration.git_commit, False),
@@ -301,8 +304,10 @@ def test_publish_keeps_campaign_reports_separate(
     publish_summary(store)
 
     assert (destination / report_name).exists()
+    assert (destination / json_name).exists()
     if scenario_name != "baseline":
         assert phase4.read_text(encoding="utf-8") == "historical phase 4 result\n"
+        assert historical_latest.read_text(encoding="utf-8") == "historical phase 4 metrics\n"
 
 
 async def test_classification_detects_duplicate_external_effect_and_transition() -> None:

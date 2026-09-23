@@ -185,15 +185,17 @@ def publish_summary(store: ExperimentStore) -> None:
         "executor_count": summary["executor_count"],
         "scenario_count": len(summary["scenario_breakdown"]),
     }
-    (destination / "latest.json").write_text(
+    if all(name.startswith("coding-") for name in config.scenario_names):
+        report_stem = "phase6-coding-summary"
+    elif all(name.startswith("agent-") for name in config.scenario_names):
+        report_stem = "phase5-ai-summary"
+    else:
+        report_stem = "phase4-summary"
+    # Keep the historical Phase 4 latest.json stable when publishing later cohorts.
+    json_name = "latest.json" if report_stem == "phase4-summary" else f"{report_stem}.json"
+    (destination / json_name).write_text(
         json.dumps(latest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    if all(name.startswith("coding-") for name in config.scenario_names):
-        report_name = "phase6-coding-summary.md"
-    elif all(name.startswith("agent-") for name in config.scenario_names):
-        report_name = "phase5-ai-summary.md"
-    else:
-        report_name = "phase4-summary.md"
-    (destination / report_name).write_text(
+    (destination / f"{report_stem}.md").write_text(
         (store.directory / "summary.md").read_text(encoding="utf-8"), encoding="utf-8"
     )

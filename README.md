@@ -116,7 +116,7 @@ The demo scripts create/start a unique workflow, poll with a timeout, display it
 
 ## FaultLab
 
-FaultLab starts a **separate** `continuum-faultlab` Compose project with its own volumes and host ports (`18000`, `18001`, `55435`, `55436`, `19093`). Its `clean` command removes only this exact project; it never resets normal development data. It executes real SIGKILL/pause/restart, Kafka/PostgreSQL stops, Kafka redelivery, and post-ack publisher crashes. The remaining database-time expiry and stale-token trials deliberately exercise concurrent PostgreSQL service calls. The unsafe refund baseline lives only in the harness.
+FaultLab starts a **separate** `continuum-faultlab` Compose project with its own volumes and default host ports (`28000`, `18001`, `55435`, `55436`, `19093`). Its `clean` command removes only this exact project; it never resets normal development data. It executes real SIGKILL/pause/restart, Kafka/PostgreSQL stops, Kafka redelivery, and post-ack publisher crashes. The remaining database-time expiry and stale-token trials deliberately exercise concurrent PostgreSQL service calls. The unsafe refund baseline lives only in the harness.
 
 ```bash
 uv run continuum-faultlab list
@@ -131,7 +131,7 @@ uv run continuum-faultlab clean
 
 Phase 5 adds `continuum-faultlab campaign ai-smoke` for model timeout, malformed output, persisted-decision crash, post-refund SIGKILL, persisted-tool-result crash, final-answer crash, turn-limit, and unknown-tool handling. Its results are reported **separately** from the official Phase 4 campaign below.
 
-Phase 6 adds `make faultlab-coding-smoke` for coding baseline, executor/sandbox deaths around persisted decisions, patches, tests and commits, plus path/divergence/timeout guards. These trials are also separate from the Phase 4 official campaign.
+Phase 6 adds `make faultlab-coding-smoke` for coding baseline, executor/sandbox deaths around persisted decisions, patches, tests and commits, plus path/divergence/timeout guards. The [clean-revision coding report](benchmarks/results/phase6-coding-summary.md) and [machine-readable summary](benchmarks/results/phase6-coding-summary.json) recorded **11/11 correct trials**, eight injected faults, seven recovered trials, and zero duplicate transitions or commits on three executors. This small boundary campaign is separate from Phase 4 and is not a statistical reliability estimate.
 
 On clean code commit `afef98d`, the local AI smoke experiment `bd9c0771-28c7-48cc-98c6-ed4c4f58c155` classified **8/8 trials correct**, including four real executor SIGKILL recoveries, with zero duplicate or lost refunds. This is a boundary smoke test, not a statistical reliability estimate. A separate [real Ollama demo record](benchmarks/results/phase5-agent-demo.json) documents one successful `qwen2.5:3b` support workflow: three turns, three model calls, two tool calls, and one refund.
 
