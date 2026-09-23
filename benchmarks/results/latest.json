@@ -1,0 +1,17 @@
+{
+  "correct_trials": 5075,
+  "duplicate_side_effects": 0,
+  "executor_count": 3,
+  "experiment_id": "b191853c-c1d8-4e37-91a2-a469f719567c",
+  "fault_injected_trials": 2875,
+  "git_commit": "e0aecfdb8e18c041d487b7f6d25923c90f6f552b",
+  "incorrect_trials": 0,
+  "lost_side_effects": 0,
+  "p95_recovery_ms": 5330.51,
+  "recovered_trials": 2770,
+  "scenario_count": 17,
+  "steps_succeeded": 4975,
+  "total_trials": 5175,
+  "workflow_completion_rate": 1.0,
+  "workflows_processed": 5075
+}
