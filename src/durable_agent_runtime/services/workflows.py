@@ -10,6 +10,8 @@ from durable_agent_runtime.db.models import (
     AgentRun,
     AgentToolCall,
     AgentTurn,
+    ApprovalRequest,
+    CodingWorkspace,
     ExecutionAttempt,
     ModelCall,
     OutboxEvent,
@@ -21,11 +23,13 @@ from durable_agent_runtime.domain.enums import (
     AgentRunStatus,
     AgentToolCallStatus,
     AgentTurnStatus,
+    ApprovalStatus,
     EntityType,
     ExecutionAttemptStatus,
     ModelCallStatus,
     StepStatus,
     WorkflowStatus,
+    WorkspaceStatus,
 )
 from durable_agent_runtime.domain.errors import (
     InvariantViolation,
@@ -37,10 +41,12 @@ from durable_agent_runtime.domain.state_machine import (
     validate_agent_run_transition,
     validate_agent_tool_call_transition,
     validate_agent_turn_transition,
+    validate_approval_transition,
     validate_attempt_transition,
     validate_model_call_transition,
     validate_step_transition,
     validate_workflow_transition,
+    validate_workspace_transition,
 )
 from durable_agent_runtime.events import STEP_READY_TOPIC
 from durable_agent_runtime.schemas.agents import (
@@ -327,6 +333,34 @@ class WorkflowService:
             await self._close_agent_runs(
                 workflow_id, AgentRunStatus.CANCELLED, error_code="WORKFLOW_CANCELLED"
             )
+            workspaces = list(
+                await self.session.scalars(
+                    select(CodingWorkspace)
+                    .where(CodingWorkspace.workflow_id == workflow_id)
+                    .with_for_update()
+                )
+            )
+            for workspace in workspaces:
+                if workspace.status not in {
+                    WorkspaceStatus.COMPLETED,
+                    WorkspaceStatus.FAILED,
+                    WorkspaceStatus.CANCELLED,
+                }:
+                    validate_workspace_transition(workspace.status, WorkspaceStatus.CANCELLED)
+                    workspace.status = WorkspaceStatus.CANCELLED
+                    workspace.completed_at = datetime.now(UTC)
+            approvals = list(
+                await self.session.scalars(
+                    select(ApprovalRequest)
+                    .where(ApprovalRequest.workflow_id == workflow_id)
+                    .with_for_update()
+                )
+            )
+            for approval in approvals:
+                if approval.status == ApprovalStatus.PENDING:
+                    validate_approval_transition(approval.status, ApprovalStatus.CANCELLED)
+                    approval.status = ApprovalStatus.CANCELLED
+                    approval.decided_at = datetime.now(UTC)
         logger.info("workflow_cancelled workflow_id=%s", workflow_id)
         return workflow
 

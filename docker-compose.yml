@@ -1,4 +1,11 @@
 services:
+  sandbox-image:
+    image: continuum-sandbox:phase6
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    command: ["true"]
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -6,7 +13,7 @@ services:
       POSTGRES_PASSWORD: durable
       POSTGRES_DB: durable
     ports:
-      - "${POSTGRES_PORT:-55433}:5432"
+      - "${DEV_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-55433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -23,7 +30,7 @@ services:
       POSTGRES_PASSWORD: payments
       POSTGRES_DB: payments
     ports:
-      - "${PAYMENTS_POSTGRES_PORT:-55434}:5432"
+      - "${DEV_BIND_HOST:-127.0.0.1}:${PAYMENTS_POSTGRES_PORT:-55434}:5432"
     volumes:
       - payments_data:/var/lib/postgresql/data
       - ./docker/payments/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -40,7 +47,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       PAYMENTS_DATABASE_URL: postgresql://payments:payments@payments-postgres:5432/payments
     ports:
-      - "${MOCK_PAYMENTS_PORT:-8001}:8001"
+      - "${DEV_BIND_HOST:-127.0.0.1}:${MOCK_PAYMENTS_PORT:-8001}:8001"
     depends_on:
       payments-postgres:
         condition: service_healthy
@@ -57,7 +64,7 @@ services:
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${DEV_BIND_HOST:-127.0.0.1}:${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,7 +92,7 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     ports:
-      - "${KAFKA_PORT:-19092}:19092"
+      - "${DEV_BIND_HOST:-127.0.0.1}:${KAFKA_PORT:-19092}:19092"
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -145,6 +152,8 @@ services:
     command: ["python", "-m", "durable_agent_runtime.execution.executor"]
     restart: unless-stopped
     stop_grace_period: 65s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: INFO
@@ -159,6 +168,10 @@ services:
       MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-90}
       MODEL_MAX_ATTEMPTS: ${MODEL_MAX_ATTEMPTS:-3}
       AGENT_MAX_TURNS: ${AGENT_MAX_TURNS:-8}
+      CODING_AGENT_MAX_TURNS: ${CODING_AGENT_MAX_TURNS:-12}
+      SANDBOX_IMAGE: continuum-sandbox:phase6
+      SANDBOX_VOLUME_PREFIX: ${SANDBOX_VOLUME_PREFIX:-continuum}
+      CODING_COMMAND_TIMEOUT_SECONDS: ${CODING_COMMAND_TIMEOUT_SECONDS:-30}
       FAULTLAB_PAUSE_AFTER_CLAIM: ${FAULTLAB_PAUSE_AFTER_CLAIM:-0}
       FAULTLAB_AGENT_PAUSE_AFTER_DECISION: ${FAULTLAB_AGENT_PAUSE_AFTER_DECISION:-0}
       FAULTLAB_AGENT_PAUSE_AFTER_TOOL_RESULT: ${FAULTLAB_AGENT_PAUSE_AFTER_TOOL_RESULT:-0}
@@ -168,6 +181,8 @@ services:
         condition: service_healthy
       mock-payments:
         condition: service_healthy
+      sandbox-image:
+        condition: service_completed_successfully
 
   recovery-scheduler:
     build: .

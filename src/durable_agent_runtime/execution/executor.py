@@ -80,7 +80,20 @@ async def execute_attempt(
                 return
 
     heartbeat_task = asyncio.create_task(beat())
-    if step_type == "support_agent":
+    if step_type == "coding_agent":
+        from durable_agent_runtime.coding.runner import run_coding_agent
+
+        tool_task = asyncio.create_task(
+            run_coding_agent(
+                step_input,
+                context,
+                executor_id=executor_id,
+                lease_token=token,
+                sessions=sessions,
+                settings=settings,
+            )
+        )
+    elif step_type == "support_agent":
         from durable_agent_runtime.agent.runner import run_support_agent
 
         tool_task = asyncio.create_task(

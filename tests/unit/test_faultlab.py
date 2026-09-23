@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from durable_agent_runtime.db.models import (
@@ -31,6 +32,31 @@ from durable_agent_runtime.faultlab.runner import publish_summary, run_trial, su
 from durable_agent_runtime.faultlab.runtime import DockerController, FaultLabRuntime
 from durable_agent_runtime.faultlab.scenarios import CAMPAIGNS, SCENARIOS, Scenario
 from durable_agent_runtime.faultlab.storage import ExperimentStore
+
+
+async def test_refund_observation_retries_closed_keepalive_once() -> None:
+    calls = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without a response")
+        assert request.url.path == "/refunds/count"
+        return httpx.Response(200, json={"count": 1})
+
+    runtime = FaultLabRuntime(DockerController())
+    await runtime.payments.aclose()
+    runtime.payments = httpx.AsyncClient(
+        base_url="http://localhost:18001", transport=httpx.MockTransport(respond)
+    )
+    try:
+        assert await runtime.refund_count("fixture-customer") == 1
+        assert calls == 2
+    finally:
+        await runtime.payments.aclose()
+        await runtime.api.aclose()
+        await runtime.engine.dispose()
 
 
 def config() -> ExperimentConfig:
@@ -86,10 +112,27 @@ def test_registry_and_campaigns_have_stable_names() -> None:
         "concurrent-recovery-race",
         "executor-restart",
         "database-interruption",
+        "coding-baseline",
+        "coding-crash-after-decision",
+        "coding-crash-after-patch",
+        "coding-crash-after-tests",
+        "coding-sandbox-killed",
+        "coding-executor-killed",
+        "coding-crash-before-commit",
+        "coding-crash-after-commit",
+        "coding-workspace-divergence",
+        "coding-path-traversal",
+        "coding-command-timeout",
     }
     assert required <= SCENARIOS.keys()
     assert all(scenario.version >= 1 for scenario in SCENARIOS.values())
-    assert set(CAMPAIGNS) == {"smoke", "ai-smoke", "side-effects", "reliability"}
+    assert set(CAMPAIGNS) == {
+        "smoke",
+        "ai-smoke",
+        "coding-smoke",
+        "side-effects",
+        "reliability",
+    }
     assert all(set(counts) <= SCENARIOS.keys() for counts in CAMPAIGNS.values())
     assert SCENARIOS["kafka-outage"].exclusive
     assert not SCENARIOS["baseline"].exclusive

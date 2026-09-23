@@ -17,6 +17,10 @@ from durable_agent_runtime.agent.decisions import (
 )
 from durable_agent_runtime.agent.prompt import PROMPT_VERSION, prompt_for
 from durable_agent_runtime.agent.providers import ModelResult
+from durable_agent_runtime.coding.decisions import (
+    TOOL_SEMANTICS as CODING_TOOL_SEMANTICS,
+)
+from durable_agent_runtime.coding.decisions import validate_coding_arguments
 from durable_agent_runtime.db.models import (
     AgentRun,
     AgentToolCall,
@@ -78,7 +82,15 @@ class AgentService:
         validate_agent_tool_call_transition(call.status, target)
         call.status = target
 
-    async def ensure_run(self, *, provider: str, model: str, max_turns: int) -> UUID:
+    async def ensure_run(
+        self,
+        *,
+        provider: str,
+        model: str,
+        max_turns: int,
+        agent_type: str = "support_agent",
+        prompt_version: str = PROMPT_VERSION,
+    ) -> UUID:
         async with self.session.begin():
             await self._fence()
             existing = await self.session.scalar(
@@ -94,17 +106,17 @@ class AgentService:
                 workflow_id=self.context.workflow_id,
                 step_id=self.context.step_id,
                 status=AgentRunStatus.PENDING,
-                agent_type="support_agent",
+                agent_type=agent_type,
                 provider=provider,
                 model=model,
-                system_prompt_version=PROMPT_VERSION,
+                system_prompt_version=prompt_version,
                 max_turns=max_turns,
                 current_turn_number=1,
                 started_at=now,
             )
             self.session.add(run)
             self._run_status(run, AgentRunStatus.RUNNING)
-            request = self._request(step.input, [], PROMPT_VERSION)
+            request = self._request(step.input, [], prompt_version)
             self.session.add(self._new_turn(run.id, 1, request))
             return run.id
 
@@ -293,14 +305,20 @@ class AgentService:
                 run.final_response = decision.response
                 run.completed_at = datetime.now(UTC)
             else:
-                validate_tool_arguments(decision.tool_name, decision.arguments)
+                if run.agent_type == "coding_agent":
+                    validate_coding_arguments(decision.tool_name, decision.arguments)
+                else:
+                    validate_tool_arguments(decision.tool_name, decision.arguments)
                 arguments = decision.arguments
                 tool_id = uuid4()
-                semantics = (
-                    RetrySafety.READ_ONLY
-                    if decision.tool_name == "read_refund_policy"
-                    else RetrySafety.IDEMPOTENCY_KEY_SUPPORTED
-                )
+                if run.agent_type == "coding_agent":
+                    semantics = CODING_TOOL_SEMANTICS[decision.tool_name]
+                else:
+                    semantics = (
+                        RetrySafety.READ_ONLY
+                        if decision.tool_name == "read_refund_policy"
+                        else RetrySafety.IDEMPOTENCY_KEY_SUPPORTED
+                    )
                 self.session.add(
                     AgentToolCall(
                         id=tool_id,
@@ -431,7 +449,12 @@ class AgentService:
     def _request(
         step_input: dict[str, Any], history: list[dict[str, Any]], prompt_version: str
     ) -> dict[str, Any]:
-        clean_input = {key: step_input[key] for key in ("customer_id", "amount", "request")}
+        keys = (
+            ("repository", "task", "test_command")
+            if prompt_version.startswith("coding-")
+            else ("customer_id", "amount", "request")
+        )
+        clean_input = {key: step_input[key] for key in keys}
         messages: list[dict[str, str]] = [
             {"role": "system", "content": prompt_for(prompt_version)},
             {"role": "user", "content": json.dumps(clean_input, sort_keys=True)},

@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.pool = await asyncpg.create_pool(
         os.environ.get(
             "PAYMENTS_DATABASE_URL",
-            "postgresql://payments:payments@localhost:55434/payments",
+            "postgresql://payments:payments@127.0.0.1:55434/payments",
         )
     )
     try:

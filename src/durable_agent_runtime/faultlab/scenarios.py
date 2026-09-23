@@ -12,7 +12,7 @@ from sqlalchemy import func, select, update
 
 from durable_agent_runtime.db.models import ConsumedEvent, ExecutionAttempt
 from durable_agent_runtime.events import DEAD_LETTER_TOPIC, STEP_READY_TOPIC, StepReadyEvent
-from durable_agent_runtime.faultlab import agent_scenarios
+from durable_agent_runtime.faultlab import agent_scenarios, coding_scenarios
 from durable_agent_runtime.faultlab.assertions import classify_workflow
 from durable_agent_runtime.faultlab.models import TrialResult
 from durable_agent_runtime.faultlab.runtime import FaultLabRuntime, wait_for
@@ -469,7 +469,7 @@ async def lost_kafka_offset_ack(runtime: FaultLabRuntime, trial: TrialResult) ->
         event = (await runtime.outbox(trial.workflow_id))[0]
         consumer = AIOKafkaConsumer(
             STEP_READY_TOPIC,
-            bootstrap_servers="localhost:19093",
+            bootstrap_servers="127.0.0.1:19093",
             group_id="continuum-workers-v1",
             auto_offset_reset="earliest",
             enable_auto_commit=False,
@@ -492,7 +492,7 @@ async def lost_kafka_offset_ack(runtime: FaultLabRuntime, trial: TrialResult) ->
         await consumer.stop()
         consumer = AIOKafkaConsumer(
             STEP_READY_TOPIC,
-            bootstrap_servers="localhost:19093",
+            bootstrap_servers="127.0.0.1:19093",
             group_id="continuum-workers-v1",
             auto_offset_reset="earliest",
             enable_auto_commit=False,
@@ -554,7 +554,7 @@ async def dispatcher_crash_after_ack(runtime: FaultLabRuntime, trial: TrialResul
     oneoff = ""
     observer = AIOKafkaConsumer(
         STEP_READY_TOPIC,
-        bootstrap_servers="localhost:19093",
+        bootstrap_servers="127.0.0.1:19093",
         group_id=f"faultlab-observer-{trial.trial_id}",
         auto_offset_reset="latest",
         enable_auto_commit=False,
@@ -599,7 +599,7 @@ async def dispatcher_crash_after_ack(runtime: FaultLabRuntime, trial: TrialResul
 async def malformed_kafka_event(runtime: FaultLabRuntime, trial: TrialResult) -> None:
     observer = AIOKafkaConsumer(
         DEAD_LETTER_TOPIC,
-        bootstrap_servers="localhost:19093",
+        bootstrap_servers="127.0.0.1:19093",
         group_id=f"faultlab-dlq-{trial.trial_id}",
         auto_offset_reset="latest",
         enable_auto_commit=False,
@@ -807,6 +807,72 @@ SCENARIOS: dict[str, Scenario] = {
             "Unknown model-selected tool fails closed",
             agent_scenarios.unknown_tool,
         ),
+        Scenario(
+            "coding-baseline",
+            "Fixture patch, tests, approval, local commit",
+            coding_scenarios.baseline,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-crash-after-decision",
+            "Executor SIGKILL after durable coding decision",
+            coding_scenarios.crash_after_decision,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-crash-after-patch",
+            "Executor SIGKILL after patch before checkpoint",
+            coding_scenarios.crash_after_patch,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-crash-after-tests",
+            "Executor SIGKILL after tests before result",
+            coding_scenarios.crash_after_tests,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-sandbox-killed",
+            "Sandbox SIGKILL; workspace volume survives",
+            coding_scenarios.sandbox_killed,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-executor-killed",
+            "Executor SIGKILL mid-coding",
+            coding_scenarios.executor_killed,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-crash-before-commit",
+            "Executor SIGKILL after approval before commit",
+            coding_scenarios.crash_before_commit,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-crash-after-commit",
+            "Executor SIGKILL after Git commit before DB result",
+            coding_scenarios.crash_after_commit,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-workspace-divergence",
+            "Unexpected workspace edit is detected after executor replacement",
+            coding_scenarios.workspace_divergence,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-path-traversal",
+            "Structured file tool rejects traversal out of workspace",
+            coding_scenarios.path_traversal,
+            exclusive=True,
+        ),
+        Scenario(
+            "coding-command-timeout",
+            "Sandbox terminates a bounded test command",
+            coding_scenarios.command_timeout,
+            exclusive=True,
+        ),
     )
 }
 
@@ -815,9 +881,12 @@ CAMPAIGNS: dict[str, dict[str, int]] = {
     "smoke": {
         name: 1
         for name in SCENARIOS
-        if name != "unsafe-refund-retry-baseline" and not name.startswith("agent-")
+        if name != "unsafe-refund-retry-baseline"
+        and not name.startswith("agent-")
+        and not name.startswith("coding-")
     },
     "ai-smoke": {name: 1 for name in SCENARIOS if name.startswith("agent-")},
+    "coding-smoke": {name: 1 for name in SCENARIOS if name.startswith("coding-")},
     "side-effects": {
         "executor-crash-after-side-effect": 5,
         "external-response-lost-after-side-effect": 20,

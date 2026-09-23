@@ -15,6 +15,11 @@ class StepNotFound(DomainError):
         super().__init__(f"Step {step_id} was not found")
 
 
+class ApprovalNotFound(DomainError):
+    def __init__(self, approval_id: UUID) -> None:
+        super().__init__(f"Approval {approval_id} was not found")
+
+
 class InvalidStateTransition(DomainError):
     def __init__(self, entity: str, from_status: str, to_status: str) -> None:
         super().__init__(f"Invalid {entity} transition: {from_status} -> {to_status}")

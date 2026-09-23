@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from durable_agent_runtime.domain.errors import (
+    ApprovalNotFound,
     DomainError,
     InvalidStateTransition,
     InvariantViolation,
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 def install_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(WorkflowNotFound)
     @app.exception_handler(StepNotFound)
+    @app.exception_handler(ApprovalNotFound)
     async def not_found_handler(_request: Request, exc: DomainError) -> JSONResponse:
         return _error(status.HTTP_404_NOT_FOUND, "not_found", str(exc))
 

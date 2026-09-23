@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 import httpx
 
-API = "http://localhost:8000"
+API = "http://127.0.0.1:8000"
 PAYMENTS = "http://localhost:8001"
 
 

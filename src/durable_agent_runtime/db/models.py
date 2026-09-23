@@ -26,11 +26,15 @@ from durable_agent_runtime.domain.enums import (
     AgentRunStatus,
     AgentToolCallStatus,
     AgentTurnStatus,
+    ApprovalStatus,
+    CommandStatus,
     EntityType,
     ExecutionAttemptStatus,
     ModelCallStatus,
+    SandboxStatus,
     StepStatus,
     WorkflowStatus,
+    WorkspaceStatus,
 )
 
 
@@ -42,7 +46,11 @@ def enum_values(
     | type[AgentRunStatus]
     | type[AgentTurnStatus]
     | type[ModelCallStatus]
-    | type[AgentToolCallStatus],
+    | type[AgentToolCallStatus]
+    | type[WorkspaceStatus]
+    | type[SandboxStatus]
+    | type[CommandStatus]
+    | type[ApprovalStatus],
 ) -> list[str]:
     return [item.value for item in enum_class]
 
@@ -469,4 +477,196 @@ class AgentToolCall(TimestampMixin, Base):
         UniqueConstraint("agent_turn_id", name="uq_agent_tool_calls_turn_id"),
         UniqueConstraint("operation_id", name="uq_agent_tool_calls_operation_id"),
         Index("ix_agent_tool_calls_run_id", agent_run_id),
+    )
+
+
+class CodingWorkspace(TimestampMixin, Base):
+    __tablename__ = "coding_workspaces"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workflow_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False
+    )
+    step_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=False
+    )
+    agent_run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[WorkspaceStatus] = mapped_column(
+        Enum(
+            WorkspaceStatus,
+            name="workspace_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+    )
+    repository_source: Mapped[str] = mapped_column(String(300), nullable=False)
+    workspace_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    volume_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    baseline_git_head: Mapped[str | None] = mapped_column(String(40))
+    current_git_head: Mapped[str | None] = mapped_column(String(40))
+    final_git_head: Mapped[str | None] = mapped_column(String(40))
+    diff_hash: Mapped[str | None] = mapped_column(String(64))
+    tree_hash: Mapped[str | None] = mapped_column(String(64))
+    file_hashes: Mapped[dict[str, str] | None] = mapped_column(JSONB)
+    test_command: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    last_checkpoint_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("step_id", name="uq_coding_workspaces_step_id"),
+        UniqueConstraint("agent_run_id", name="uq_coding_workspaces_agent_run_id"),
+        UniqueConstraint("workspace_key", name="uq_coding_workspaces_key"),
+        UniqueConstraint("volume_name", name="uq_coding_workspaces_volume"),
+        Index("ix_coding_workspaces_workflow_id", workflow_id),
+    )
+
+
+class WorkspaceCheckpoint(Base):
+    __tablename__ = "workspace_checkpoints"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("coding_workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    git_head: Mapped[str] = mapped_column(String(40), nullable=False)
+    diff_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    tree_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    file_hashes: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
+    operation_id: Mapped[str | None] = mapped_column(String(120))
+    reason: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "sequence_number", name="uq_workspace_checkpoint_sequence"
+        ),
+        UniqueConstraint("workspace_id", "operation_id", name="uq_workspace_checkpoint_operation"),
+        CheckConstraint("sequence_number >= 1", name="workspace_checkpoint_sequence_positive"),
+        Index("ix_workspace_checkpoints_workspace_id", workspace_id),
+    )
+
+
+class SandboxExecution(Base):
+    __tablename__ = "sandbox_executions"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("coding_workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    execution_attempt_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("execution_attempts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    container_ref: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[SandboxStatus] = mapped_column(
+        Enum(
+            SandboxStatus,
+            name="sandbox_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+    )
+    image: Mapped[str] = mapped_column(String(200), nullable=False)
+    resource_limits: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    network_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    exit_reason: Mapped[str | None] = mapped_column(String(200))
+
+    __table_args__ = (
+        UniqueConstraint("container_ref", name="uq_sandbox_executions_container"),
+        Index("ix_sandbox_executions_workspace_id", workspace_id),
+    )
+
+
+class SandboxCommand(Base):
+    __tablename__ = "sandbox_commands"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("coding_workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    agent_tool_call_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("agent_tool_calls.id", ondelete="SET NULL")
+    )
+    command_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    argv: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[CommandStatus] = mapped_column(
+        Enum(
+            CommandStatus,
+            name="sandbox_command_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+    )
+    exit_code: Mapped[int | None] = mapped_column(Integer)
+    stdout_excerpt: Mapped[str | None] = mapped_column(Text)
+    stderr_excerpt: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("timeout_ms > 0", name="sandbox_command_timeout_positive"),
+        Index("ix_sandbox_commands_workspace_id", workspace_id),
+        Index("ix_sandbox_commands_tool_call_id", agent_tool_call_id),
+    )
+
+
+class ApprovalRequest(Base):
+    __tablename__ = "approval_requests"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workflow_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False
+    )
+    step_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("coding_workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    action_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[ApprovalStatus] = mapped_column(
+        Enum(
+            ApprovalStatus,
+            name="approval_status",
+            native_enum=False,
+            values_callable=enum_values,
+            create_constraint=True,
+        ),
+        nullable=False,
+    )
+    operation_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    commit_sha: Mapped[str | None] = mapped_column(String(40))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "action_type", name="uq_approval_requests_workspace_action"
+        ),
+        UniqueConstraint("operation_id", name="uq_approval_requests_operation_id"),
+        Index("ix_approval_requests_status", status),
+        Index("ix_approval_requests_workflow_id", workflow_id),
     )

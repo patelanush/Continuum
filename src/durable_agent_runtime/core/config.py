@@ -10,9 +10,9 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
     database_url: str = Field(
-        default="postgresql+asyncpg://durable:durable@localhost:55433/durable"
+        default="postgresql+asyncpg://durable:durable@127.0.0.1:55433/durable"
     )
-    kafka_bootstrap_servers: str = "localhost:19092"
+    kafka_bootstrap_servers: str = "127.0.0.1:19092"
     kafka_consumer_group: str = "continuum-workers-v1"
     outbox_poll_interval: float = 0.5
     outbox_publish_lease_seconds: float = Field(default=30, gt=10)
@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     model_timeout_seconds: float = Field(default=90, gt=0)
     model_max_attempts: int = Field(default=3, ge=1)
     agent_max_turns: int = Field(default=8, ge=1)
+    coding_agent_max_turns: int = Field(default=12, ge=1)
+    sandbox_image: str = "continuum-sandbox:phase6"
+    sandbox_volume_prefix: str = "continuum"
+    coding_command_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    coding_max_file_read_bytes: int = Field(default=32_768, ge=1024, le=1_000_000)
+    coding_max_patch_bytes: int = Field(default=32_768, ge=1024, le=1_000_000)
+    coding_max_command_output_bytes: int = Field(default=8_192, ge=1024, le=100_000)
+    coding_max_search_results: int = Field(default=50, ge=1, le=500)
 
     @model_validator(mode="after")
     def heartbeat_before_expiry(self) -> "Settings":

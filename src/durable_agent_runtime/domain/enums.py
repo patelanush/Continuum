@@ -57,3 +57,34 @@ class AgentToolCallStatus(StrEnum):
     PENDING = "PENDING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+
+
+class WorkspaceStatus(StrEnum):
+    PENDING = "PENDING"
+    READY = "READY"
+    ACTIVE = "ACTIVE"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class SandboxStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    STOPPED = "STOPPED"
+
+
+class CommandStatus(StrEnum):
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    TIMED_OUT = "TIMED_OUT"
+    INTERRUPTED = "INTERRUPTED"
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"

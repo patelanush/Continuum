@@ -19,7 +19,7 @@ pytestmark = pytest.mark.integration
 async def payments_client() -> AsyncIterator[AsyncClient]:
     pool = await asyncpg.create_pool(
         os.getenv(
-            "PAYMENTS_DATABASE_URL", "postgresql://payments:payments@localhost:55434/payments"
+            "PAYMENTS_DATABASE_URL", "postgresql://payments:payments@127.0.0.1:55434/payments"
         )
     )
     app.state.pool = pool
@@ -116,7 +116,7 @@ async def test_real_http_timeout_occurs_before_refund_commit() -> None:
         pytest.skip("requires the isolated FaultLab mock-payments HTTP service")
     customer = f"timeout-{uuid4()}"
     key = f"route:{uuid4()}"
-    async with httpx.AsyncClient(base_url="http://localhost:18001") as client:
+    async with httpx.AsyncClient(base_url="http://127.0.0.1:18001") as client:
         with pytest.raises(httpx.ReadTimeout):
             await client.post(
                 "/refunds",

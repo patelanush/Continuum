@@ -12,7 +12,7 @@ from durable_agent_runtime.api.app import create_app
 from durable_agent_runtime.db.session import get_session
 
 TEST_DATABASE_URL = os.getenv(
-    "TEST_DATABASE_URL", "postgresql+asyncpg://durable:durable@localhost:55433/durable_test"
+    "TEST_DATABASE_URL", "postgresql+asyncpg://durable:durable@127.0.0.1:55433/durable_test"
 )
 
 test_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)

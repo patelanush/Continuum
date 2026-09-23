@@ -1,4 +1,4 @@
-# Failure Model through Phase 5
+# Failure Model through Phase 6
 
 Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a transactional outbox, an idempotent inbox, and durable leased execution attempts. It does **not** promise exactly-once distributed or arbitrary external execution.
 
@@ -23,6 +23,13 @@ Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a 
 - **Crash after agent refund side effect:** The tool call and operation ID precede HTTP I/O. Retry uses the same key; the independent payments service returns the original refund. A real FaultLab executor SIGKILL after payment commit verifies one refund and no reinference of the persisted refund turn.
 - **Crash after persisted tool result or final answer:** The next turn or final AgentRun result is resumed, not recomputed. Real FaultLab container crashes exercise both windows.
 - **Unknown tool and unbounded loop:** The tool allowlist rejects unknown names and arguments; model attempts and agent turns have configured finite limits.
+- **Patch response lost after filesystem write:** The persisted coding tool call has a stable operation ID and expected-before SHA-256/file map. Replacement inspects the same persistent workspace, recognizes the exact after-state, and records the patch result without writing twice. A real executor SIGKILL after patch application was exercised.
+- **Sandbox container dies:** The logical workspace volume survives; a new container mounts it and checks the durable fingerprint. FaultLab kills the actual sandbox container.
+- **Tests finish but result is lost:** The fixed pytest command can run again; a replacement records the new bounded result. A SIGKILL after test execution exercises this boundary.
+- **Approved Git commit response is lost:** Git HEAD carries an exact `Continuum-Operation-ID` trailer. Recovery reuses its SHA and does not make another commit. FaultLab kills an executor after Git commit but before DB result.
+- **Unexpected workspace divergence or path escape:** Fingerprint/expected-hash mismatch fails closed; a central resolver rejects traversal, absolute host paths, and symlink escapes. Tests and FaultLab cover these controls.
+- **Command timeout:** The sandbox terminates the command process group and returns a timed-out result; no unbounded test command is accepted.
+- **Malformed model-generated Python replacement:** Local Ollama produced an unterminated docstring in a real coding attempt. The first run's sandbox tests caught it and refused approval. Phase 6 now parses Python replacements before decision materialization and again before sandbox write, so syntax-invalid content consumes a bounded failed ModelCall rather than changing the workspace. The invalid-replacement regression test preserves this boundary.
 
 ## Boundary table
 
@@ -42,9 +49,9 @@ Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a 
 - Truly non-idempotent APIs without a reliable key or reconciliation mechanism are **not** automatically retried. An unknown tool type cannot acquire a safe crash-retry guarantee merely by being configured as a workflow step.
 - `mock_refund` is an independent local demonstrator, not a real payment integration. Its idempotency-key storage has no production retention/expiry policy. Test-only delay controls must remain local.
 - A transient payment/DB outage can lead to lease expiry and repeated **safe** calls. Max attempts are bounded, but there is no general retry/backoff policy, circuit breaker, or tool-specific reconciliation yet.
-- Cancellation fences durable finalization but cannot guarantee that an already-sent external HTTP request was cancelled before its effect. Human approval and compensating actions remain future work.
+- Cancellation fences durable finalization but cannot guarantee that an already-sent external HTTP request or sandbox operation was cancelled before its effect. Compensating actions remain future work. Phase 6 provides local commit approval, not a production authorization system.
 - Kafka is one local KRaft broker with a named volume, not broker HA or disaster recovery. Multi-region recovery is not implemented.
-- Broader model-provider outages beyond bounded local Ollama retries, arbitrary tool timeouts/reconciliation, code sandbox crashes, human approval, Redis coordination, OpenTelemetry, and Kubernetes remain planned. FaultLab validates supported operations, not these absent capabilities.
+- Broader model-provider outages beyond bounded local Ollama retries, arbitrary tool reconciliation, production-grade approval/authorization, Redis coordination, OpenTelemetry, and Kubernetes remain planned. FaultLab validates supported operations, not these absent capabilities.
 - A database interruption around a commit can leave a caller uncertain whether that commit succeeded. Durable rereads and idempotent commands/keys limit harm; arbitrary external reconciliation remains future work.
 - A continuously failing external service can exhaust `max_attempts` and correctly fail a workflow with no refund. FaultLab treats that as a **correct bounded failure**, not a recovered workflow.
 - Graceful executor restart may finish one in-flight attempt while heartbeating; SIGKILL/pause scenarios are separate. FaultLab originally expected two attempts from a graceful restart and corrected that harness assumption rather than altering runtime behavior.
@@ -60,3 +67,11 @@ The final clean-revision [FaultLab campaign](../benchmarks/results/phase4-summar
 - Cancellation fences future checkpoints and prevents a new model call after the workflow is cancelled, but cannot undo an already-sent HTTP refund. Human approval, compensation, and tool-specific cancellation are deferred.
 - Prompt injection defense, API authentication/authorization, sensitive-data retention, sandboxed code execution, coding-agent filesystem effects, multi-agent coordination, context compression, a provider outage across all local model capacity, and broker HA are not solved.
 - Phase 4's 5,075-trial Continuum result predates Phase 5. Phase 5 AI smoke results are separate and must not be silently added to that reliability denominator.
+
+## Phase 6 unresolved boundaries
+
+- The fixture-backed local Docker sandbox is not a hardened hostile-code or multi-tenant security boundary. The trusted executor controls the host Docker daemon; the sandbox never receives its socket. Kernel escape, malicious package supply chain, and cross-tenant isolation require stronger controls.
+- Only one bundled Python fixture is accepted as a repository source. Remote clone, networked dependencies, multiple language images, remote push/PR side effects, merge conflicts, and concurrent coding agents on one repository are deferred.
+- Approval is durably required before a **local** commit, but its development API has no authentication or human identity. An already in-flight patch/commit cannot be undone by cancellation. The executor currently remains leased while waiting for a decision.
+- Git/file reconciliation fails closed on unexpected workspace changes. It is not a general distributed filesystem transaction. A stale in-flight Docker operation around lease turnover warrants stronger per-workspace effect fencing before untrusted concurrent workloads.
+- Phase 4 official benchmark numbers predate Phases 5–6. Coding FaultLab smoke is a separate boundary validation, not an addition to the 5,075-trial reliability percentage.

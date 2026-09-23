@@ -2,9 +2,9 @@
 
 A fault-tolerant execution runtime for long-running AI workflows.
 
-**What happens when an AI agent completes an external action, but its worker dies before recording the result?** Continuum keeps workflow truth in PostgreSQL, transports readiness through at-least-once Kafka, and uses durable attempts, leases, fencing, and stable operation keys to recover supported operations. Phase 5 also persists model decisions and tool-call identities so an agent resumes accepted reasoning instead of starting over. FaultLab injects repeated failures and checks durable workflow *and independent external-service state*. Continuum does **not** claim exactly-once model inference, distributed execution, or safe automatic retries for arbitrary non-idempotent APIs.
+**What happens when an AI agent edits code, its worker dies, and its replacement cannot tell whether a patch or Git commit already happened?** Continuum keeps workflow truth in PostgreSQL, transports readiness through at-least-once Kafka, and uses durable attempts, leases, fencing, and stable operation keys. Persisted model decisions are replayed, while Phase 6 coding tools reconcile workspace/Git effects inside a restricted Docker sandbox. FaultLab injects failures and checks durable and external state. Continuum does **not** claim exactly-once model inference, distributed execution, hardened hostile-code containment, or safe automatic retries for arbitrary non-idempotent APIs.
 
-## Implemented through Phase 5
+## Implemented through Phase 6
 
 - Sequential workflow/step/attempt state machines, PostgreSQL transactions, row locks, constraints, and transition audit
 - FastAPI create/get/list/start/cancel/history API and read-only attempt diagnostics
@@ -17,6 +17,10 @@ A fault-tolerant execution runtime for long-running AI workflows.
 - Deterministic FakeModelProvider for tests/FaultLab and a real local Ollama JSON-schema provider; no paid model API dependency
 - Allowlisted read-only refund-policy tool and keyed mock-refund tool with durable per-tool-call operation identity, context reconstruction, and replay-safe agent recovery
 - Read-only `/agent` trajectory diagnostics and eight Phase 5 AI FaultLab scenarios
+- `coding_agent` over a persistent fixture-repository workspace with disposable non-root, networkless, resource-limited Docker sandboxes
+- Typed repository tools, bounded fixed pytest execution, durable command/checkpoint evidence, and patch/commit reconciliation after response loss
+- Durable human-approval request before a **local** Git commit, plus read-only coding diagnostics and explicit approve/reject API
+- Phase 6 coding FaultLab scenarios with real executor/sandbox SIGKILL boundaries
 
 There are no paid model providers, real payments, arbitrary tool reconciliation, Redis, Kubernetes, or Kafka high-availability cluster.
 
@@ -36,6 +40,9 @@ flowchart TD
     E --> AR[(AgentRun / turns / model calls / tool calls)]
     AR -->|JSON-schema decision| O[Local Ollama or scripted fake]
     AR -->|stable tool-call key| M
+    AR -->|typed coding action| SB[Restricted Docker sandbox]
+    SB --> WV[(Persistent Git workspace volume)]
+    WV --> CP[(Commands / checkpoints / approvals)]
     M --> MP[(Independent Payments PostgreSQL)]
     E -->|fenced finalize| PG
     R[Recovery Scheduler] -->|expired leases, DB time| PG
@@ -50,6 +57,8 @@ Execution remains **reserve → commit → external execution without an open Co
 
 For `support_agent`, the outer execution attempt also persists each accepted model decision **before** executing its allowlisted tool. The refund key is `continuum:agent-tool:<tool_call_id>`, stable across replacement attempts. A model response lost before its decision commit may be inferred again and differ; a committed decision is replayed. See [Durable agents](docs/AGENTS.md).
 
+For `coding_agent`, the logical Git workspace persists separately from disposable sandbox containers. A patch whose response was lost is recognized by its expected file/tree hashes; an approved local commit whose response was lost is recognized by an exact operation-ID trailer. Unexpected workspace divergence fails closed. The current source is a bundled Python fixture, not arbitrary remote repositories. The trusted executor controls Docker; the sandbox never receives the Docker socket. See [Coding agent](docs/CODING_AGENT.md) and [security scope](docs/SANDBOX_SECURITY.md).
+
 ## Quick start
 
 Requires Docker Compose and Python 3.12 with [uv](https://docs.astral.sh/uv/). All services use local images and development credentials. Main-stack PostgreSQL, Kafka, and mock-payments use named volumes.
@@ -63,7 +72,7 @@ curl http://localhost:8001/health/ready
 
 Scale normal development workers/executors with `docker compose up --build -d --scale worker=3 --scale executor=3`. `make down` retains main-stack volumes; `make reset` **deletes** those volumes. Host ports default to API `8000`, mock-payments `8001`, Continuum PostgreSQL `55433`, payments PostgreSQL `55434`, and Kafka `19092`.
 
-For a local model, install/start Ollama separately and pull a compact model (the validated local smoke used `qwen2.5:3b`). Docker executors default to `http://host.docker.internal:11434`; override `OLLAMA_BASE_URL` and `OLLAMA_MODEL` as needed. `make agent-demo-fake` works without Ollama; `make agent-demo-ollama` uses the real local model. Model weights are not stored in this repository or downloaded in CI.
+For a local model, install/start Ollama separately and pull a compact model (Phase 5 validated `qwen2.5:3b`). Docker executors default to `http://host.docker.internal:11434`; override `OLLAMA_BASE_URL` and `OLLAMA_MODEL` as needed. `make agent-demo-fake` and `make coding-demo-fake` work without Ollama; the corresponding `-ollama` targets use the real local model. Model weights are not stored in this repository or downloaded in CI.
 
 ## API example
 
@@ -76,6 +85,8 @@ curl -sS http://localhost:8000/api/v1/workflows/WORKFLOW_ID
 curl -sS http://localhost:8000/api/v1/workflows/WORKFLOW_ID/attempts
 curl -sS http://localhost:8000/api/v1/workflows/WORKFLOW_ID/history
 curl -sS http://localhost:8000/api/v1/workflows/WORKFLOW_ID/agent
+curl -sS http://localhost:8000/api/v1/workflows/WORKFLOW_ID/coding
+curl -sS 'http://localhost:8000/api/v1/approvals?status=PENDING'
 ```
 
 `/start` returns after its PostgreSQL state/outbox transaction, not after asynchronous execution. Poll GET for `SUCCEEDED` or `FAILED`. The mock refund input is `{"customer_id":"customer-123","amount":"49.99"}`. The `slow_noop` input `{"duration_ms":1000}` and payment post-commit delay are deterministic local testing controls. FaultLab-only payment failure modes are rejected outside `APP_ENV=faultlab`.
@@ -90,6 +101,16 @@ make agent-demo-fake
 # If local Ollama is available:
 make agent-demo-ollama
 ```
+
+Coding fixture demo (asynchronous approval and local commit, no remote push):
+
+```bash
+make coding-demo-fake
+# Optional when local Ollama is running:
+make coding-demo-ollama
+```
+
+The script creates a workspace for the bundled failing Python fixture, shows the tool trajectory and six-test result, waits for a `COMMIT_PATCH` request, approves it through the local API, and verifies one local commit. The approval API is unauthenticated development infrastructure: do not expose it to untrusted clients.
 
 The demo scripts create/start a unique workflow, poll with a timeout, display its trajectory, and independently verify one mock refund. Fake-provider scripts and post-commit delay controls are for local tests/FaultLab, not arbitrary model-selected execution.
 
@@ -110,6 +131,8 @@ uv run continuum-faultlab clean
 
 Phase 5 adds `continuum-faultlab campaign ai-smoke` for model timeout, malformed output, persisted-decision crash, post-refund SIGKILL, persisted-tool-result crash, final-answer crash, turn-limit, and unknown-tool handling. Its results are reported **separately** from the official Phase 4 campaign below.
 
+Phase 6 adds `make faultlab-coding-smoke` for coding baseline, executor/sandbox deaths around persisted decisions, patches, tests and commits, plus path/divergence/timeout guards. These trials are also separate from the Phase 4 official campaign.
+
 On clean code commit `afef98d`, the local AI smoke experiment `bd9c0771-28c7-48cc-98c6-ed4c4f58c155` classified **8/8 trials correct**, including four real executor SIGKILL recoveries, with zero duplicate or lost refunds. This is a boundary smoke test, not a statistical reliability estimate. A separate [real Ollama demo record](benchmarks/results/phase5-agent-demo.json) documents one successful `qwen2.5:3b` support workflow: three turns, three model calls, two tool calls, and one refund.
 
 The clean-revision [official campaign](benchmarks/results/phase4-summary.md) recorded **5,175 trials**: 5,075 Continuum trials (2,875 with injected faults) were classified correct, including 510 workflows expecting a refund with **zero duplicate or lost refunds**. The 100 separate, intentionally unsafe retry controls produced 100 duplicate refunds. Recovery-to-success was 2,770/2,770 where required; 100 persistent pre-commit timeout workflows correctly ended `FAILED` with no refund. Replacement-attempt recovery had a measured p95 of **5,330.51 ms** across 547 samples with a five-second test lease. See the [methodology and denominators](docs/FAULTLAB.md). These are local single-broker observations, **not** production-scale reliability guarantees.
@@ -126,6 +149,6 @@ make test-kafka
 
 ## Planned
 
-Phase 6 may add a sandboxed coding-agent demonstration. Arbitrary non-idempotent tool reconciliation, human approval, filesystem-effect recovery, OpenTelemetry, Kubernetes, and broker HA remain unimplemented.
+Arbitrary non-idempotent tool reconciliation, remote Git push/PR effects, production authorization, hardened hostile-code containment, OpenTelemetry, Kubernetes, and broker HA remain unimplemented.
 
-See [Architecture](docs/ARCHITECTURE.md), [Durable agents](docs/AGENTS.md), [Design Decisions](docs/DESIGN_DECISIONS.md), [Failure Model](docs/FAILURE_MODEL.md), and [FaultLab methodology](docs/FAULTLAB.md).
+See [Architecture](docs/ARCHITECTURE.md), [Durable agents](docs/AGENTS.md), [Coding agent](docs/CODING_AGENT.md), [Sandbox security](docs/SANDBOX_SECURITY.md), [Design Decisions](docs/DESIGN_DECISIONS.md), [Failure Model](docs/FAILURE_MODEL.md), and [FaultLab methodology](docs/FAULTLAB.md).

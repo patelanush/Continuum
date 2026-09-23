@@ -358,3 +358,37 @@ boundary for ownership without a Phase 3 need.
 **Reason:** Deterministic failure-boundary tests cannot depend on model sampling or multi-gigabyte downloads. A local provider proves the adapter path without paid credentials, while structured validation keeps the durable contract provider-independent.
 
 **Tradeoff:** A fake-provider test does not prove model quality, and a single compact local-model smoke does not prove general tool-selection reliability. Local inference has hardware/electricity costs even without paid API charges.
+
+## Phase 6: one logical workspace, disposable Docker containers
+
+**Decision:** A coding step owns one durable workspace/volume; each execution attempt has a new sandbox record/container. Only the trusted executor talks to Docker. The sandbox is non-root, non-privileged, networkless, resource-limited, and mounted with only its workspace volume, never the Docker socket.
+
+**Reason:** The agent must not execute code on the host or lose edits when an executor/container dies. Docker gives a practical local process/filesystem boundary while PostgreSQL and the volume retain logical state.
+
+**Tradeoff:** The trusted executor's Docker control access is powerful; this is not hardened hostile-code or multi-tenant isolation. The current source is a bundled Python fixture. Public URL cloning and networked dependency installation are deferred pending a trust/network policy.
+
+## Structured tools instead of a shell
+
+**Decision:** Allowlist typed list/read/search, full-file replacement, fixed pytest, and Git status/diff. File paths share one secure resolver. Do not provide arbitrary `run_command`, Docker controls, URLs, or `shell=True` to the model.
+
+**Reason:** Bounded, explicit operations have auditable identities and individual recovery policies. A model-generated shell string cannot be safely inferred to be read-only or idempotent.
+
+**Tradeoff:** The agent is limited to Python fixture tasks and one approved test command. Broader repositories need explicit tool, image, and dependency policies.
+
+## Reconcile Git/file effects, never blindly replay them
+
+**Decision:** Persist the AgentToolCall and SandboxCommand intent before applying a patch. Compare durable checkpoint file hashes with actual workspace; apply one atomic file replacement or recognize its exact after-state. Save a Git diff/tree fingerprint checkpoint. Treat patch and local Git commit as `RECONCILABLE`, not idempotent. Tag commits with an exact operation-ID trailer.
+
+**Reason:** A process can die after the filesystem/Git effect but before its DB result. Repeating an unchecked patch or commit could duplicate or corrupt work. Git plus file hashes make the ambiguous result inspectable; unexpected divergence fails closed.
+
+**Tradeoff:** Full-file replacement is more constrained than arbitrary unified diffs. The current reconciliation does not guarantee hostile concurrent writers are safe; only one leased coding execution is supported per step. Read-only-ish tests may rerun after response loss.
+
+Python replacement text is parsed before the model decision is accepted and again inside the sandbox before a write. A real `qwen2.5:3b` attempt exposed an unterminated docstring that tests caught after application; the validation gate now records that response as a failed ModelCall and asks for a corrected decision instead of mutating the workspace.
+
+## Explicit durable approval before local commit
+
+**Decision:** Require a passing sandbox test result and a persisted `APPROVED` request before invoking local Git commit. Keep remote push/PR creation out of Phase 6.
+
+**Reason:** Model completion is not human authorization to publish a code change. Approval is a durable transaction boundary; the commit operation has its own stable identity for response-loss recovery.
+
+**Tradeoff:** Approval waiting currently holds an executor lease and the development API is unauthenticated. Production use needs identity/authorization and a suspended-attempt state to release capacity. The code sandbox is not a substitute for human review.

@@ -37,7 +37,7 @@ class DockerController:
         self.environment = {
             **os.environ,
             "APP_ENV": "faultlab",
-            "API_PORT": "18000",
+            "API_PORT": "28000",
             "MOCK_PAYMENTS_PORT": "18001",
             "POSTGRES_PORT": "55435",
             "PAYMENTS_POSTGRES_PORT": "55436",
@@ -52,6 +52,9 @@ class DockerController:
             "MODEL_TIMEOUT_SECONDS": "5",
             "MODEL_MAX_ATTEMPTS": "3",
             "AGENT_MAX_TURNS": "8",
+            "CODING_AGENT_MAX_TURNS": "12",
+            "SANDBOX_VOLUME_PREFIX": self.project,
+            "CODING_COMMAND_TIMEOUT_SECONDS": "10",
             "FAULTLAB_DISPATCHER_PAUSE_AFTER_ACK": "0",
             "FAULTLAB_PAUSE_AFTER_CLAIM": "0",
         }
@@ -93,6 +96,17 @@ class DockerController:
         )
 
     async def clean(self) -> None:
+        label = f"label=continuum.project={self.project}"
+        containers = (await self.command("docker", "ps", "-aq", "--filter", label)).splitlines()
+        for container_id in containers:
+            await self.command("docker", "rm", "-f", container_id)
+        volumes = (
+            await self.command("docker", "volume", "ls", "-q", "--filter", label)
+        ).splitlines()
+        for volume in volumes:
+            if not volume.startswith(f"{self.project}-ws-"):
+                raise RuntimeError("Refusing to remove an unexpected FaultLab volume")
+            await self.command("docker", "volume", "rm", volume)
         await self.compose("down", "--volumes", "--remove-orphans")
 
     async def service_containers(self, service: str, *, include_stopped: bool = False) -> list[str]:
@@ -144,15 +158,15 @@ async def wait_for[T](
 class FaultLabRuntime:
     def __init__(self, docker: DockerController) -> None:
         self.docker = docker
-        self.api = httpx.AsyncClient(base_url="http://localhost:18000", timeout=10)
-        self.payments = httpx.AsyncClient(base_url="http://localhost:18001", timeout=10)
+        self.api = httpx.AsyncClient(base_url="http://127.0.0.1:28000", timeout=10)
+        self.payments = httpx.AsyncClient(base_url="http://127.0.0.1:18001", timeout=10)
         self.engine = create_async_engine(
-            "postgresql+asyncpg://durable:durable@localhost:55435/durable",
+            "postgresql+asyncpg://durable:durable@127.0.0.1:55435/durable",
             pool_pre_ping=True,
         )
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
         self.producer = AIOKafkaProducer(
-            bootstrap_servers="localhost:19093", acks="all", enable_idempotence=True
+            bootstrap_servers="127.0.0.1:19093", acks="all", enable_idempotence=True
         )
 
     async def __aenter__(self) -> "FaultLabRuntime":
@@ -221,7 +235,7 @@ class FaultLabRuntime:
         return await wait_for(probe, wait_timeout=wait_timeout)
 
     async def refund(self, key: str) -> dict[str, Any] | None:
-        response = await self.payments.get(f"/refunds/by-idempotency-key/{key}")
+        response = await self._payments_get(f"/refunds/by-idempotency-key/{key}")
         if response.status_code == 404:
             return None
         response.raise_for_status()
@@ -231,9 +245,23 @@ class FaultLabRuntime:
         return await wait_for(lambda: self.refund(key))
 
     async def refund_count(self, customer_id: str) -> int:
-        response = await self.payments.get("/refunds/count", params={"customer_id": customer_id})
+        response = await self._payments_get("/refunds/count", params={"customer_id": customer_id})
         response.raise_for_status()
         return int(response.json()["count"])
+
+    async def _payments_get(
+        self, path: str, *, params: dict[str, str] | None = None
+    ) -> httpx.Response:
+        # A post-crash observation can hit a just-closed HTTP keep-alive connection.
+        # Retry only this read-only probe, not the effect or its correctness assertion.
+        for attempt in range(3):
+            try:
+                return await self.payments.get(path, params=params)
+            except httpx.TransportError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.1)
+        raise AssertionError("Unreachable read-only probe retry state")
 
     async def outbox(self, workflow_id: UUID) -> list[OutboxEvent]:
         async with self.sessions() as session:
@@ -249,7 +277,7 @@ class FaultLabRuntime:
         self, topic: str, partition: int, offset: int, *, group: str = "continuum-workers-v1"
     ) -> None:
         observer = AIOKafkaConsumer(
-            bootstrap_servers="localhost:19093", group_id=group, enable_auto_commit=False
+            bootstrap_servers="127.0.0.1:19093", group_id=group, enable_auto_commit=False
         )
         await observer.start()
         try:

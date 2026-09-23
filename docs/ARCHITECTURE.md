@@ -1,4 +1,4 @@
-# Architecture through Phase 5
+# Architecture through Phase 6
 
 ## Authority and layers
 
@@ -68,3 +68,24 @@ The critical commit is **ModelCall success + accepted AgentTurn decision + Agent
 The model response generated before a decision commit can be lost and re-generated differently after a crash. No external action has been authorized from that uncommitted response. Once a decision is committed, replay uses it without model inference for that turn. A refund committed externally but not checkpointed internally is retried with the *same* `continuum:agent-tool:<tool_call_id>` key and is deduplicated by the independent payment service. This is a keyed side-effect guarantee for the two allowlisted tools, **not** exactly-once model inference or arbitrary tool execution.
 
 The read-only `/agent` trajectory API exposes validated decisions and summaries, not raw provider responses. API authentication and sensitive-data retention policy remain production concerns; this is a local demonstration service. More agent details and examples are in [AGENTS.md](AGENTS.md).
+
+## Phase 6: durable coding effects
+
+```mermaid
+flowchart LR
+  A[Leased coding-agent attempt] --> R[(Durable AgentRun / turns)]
+  R --> T[(Persisted structured tool intent)]
+  T --> S[Trusted sandbox manager]
+  S --> C[Disposable Docker container]
+  C --> V[(Persistent workspace volume + Git)]
+  V --> P[(PostgreSQL checkpoints / commands)]
+  P --> H[(Approval request)]
+  H -->|APPROVED| G[Local Git commit with operation trailer]
+  G --> P
+```
+
+The workspace ID is unique per coding step; sandbox IDs are per outer attempt. Only the sandbox process sees the assigned workspace mount. It has no network or Docker socket. The trusted executor controls Docker, which is a local-development trust boundary, not a hardened multi-tenant deployment design. Repository effects and tests never run inside a Continuum PostgreSQL transaction. The fixed source `fixture:discount_service` is prepared idempotently on a labeled volume, and the same volume is reattached after container/executor death.
+
+The coding prompt and tool registry restrict model actions to file listing/reading/search, one typed full-file replacement, fixed pytest execution, and Git status/diff. `SandboxCommand` records the intent before Docker I/O. Every mutation compares the durable checkpoint's file map/tree hash to actual Git workspace state. A completed patch whose DB result was lost is recognized from its exact after-state; unexplained divergence fails closed. Tests can be repeated after a crash. An approval request is persisted only after a passing test record newer than the mutation checkpoint. The approval API commits `APPROVED` before the sandbox makes a local Git commit. A lost commit response is reconciled by the exact `Continuum-Operation-ID` trailer in HEAD, not by approximate message matching.
+
+The existing outer lease/heartbeat/token fences every checkpoint and finalization, and the model decision is not regenerated after persistence. A late process can still briefly have in-flight Docker work during lease turnover; replacement sandboxes stop prior same-workspace containers and verify fingerprints. This local design should be hardened with a single durable workspace-effect ownership protocol before concurrent coding agents or untrusted multi-tenant execution. Approval waiting currently occupies an executor lease, a capacity limitation rather than a correctness claim. Details: [Coding agent](CODING_AGENT.md) and [Sandbox security](SANDBOX_SECURITY.md).

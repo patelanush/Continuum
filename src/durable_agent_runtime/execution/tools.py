@@ -15,6 +15,7 @@ class RetrySafety(StrEnum):
     READ_ONLY = "READ_ONLY"
     IDEMPOTENT = "IDEMPOTENT"
     IDEMPOTENCY_KEY_SUPPORTED = "IDEMPOTENCY_KEY_SUPPORTED"
+    RECONCILABLE = "RECONCILABLE"
     NON_IDEMPOTENT = "NON_IDEMPOTENT"
 
 
@@ -23,6 +24,7 @@ TOOL_SAFETY: dict[str, RetrySafety] = {
     "slow_noop": RetrySafety.IDEMPOTENT,
     "mock_refund": RetrySafety.IDEMPOTENCY_KEY_SUPPORTED,
     "support_agent": RetrySafety.IDEMPOTENCY_KEY_SUPPORTED,
+    "coding_agent": RetrySafety.RECONCILABLE,
 }
 
 
@@ -82,7 +84,11 @@ def can_retry_after_crash(step_type: str, attempt_number: int, max_attempts: int
         safety = retry_safety(step_type)
     except PermanentToolError:
         return False
-    return safety in {RetrySafety.IDEMPOTENT, RetrySafety.IDEMPOTENCY_KEY_SUPPORTED}
+    return safety in {
+        RetrySafety.IDEMPOTENT,
+        RetrySafety.IDEMPOTENCY_KEY_SUPPORTED,
+        RetrySafety.RECONCILABLE,
+    }
 
 
 async def execute_tool(

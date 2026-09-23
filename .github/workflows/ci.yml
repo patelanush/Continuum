@@ -10,11 +10,11 @@ jobs:
     timeout-minutes: 25
 
     env:
-      DATABASE_URL: postgresql+asyncpg://durable:durable@localhost:55435/durable_test
-      TEST_DATABASE_URL: postgresql+asyncpg://durable:durable@localhost:55435/durable_test
-      KAFKA_BOOTSTRAP_SERVERS: localhost:19093
-      MOCK_PAYMENTS_URL: http://localhost:18001
-      PAYMENTS_DATABASE_URL: postgresql://payments:payments@localhost:55436/payments
+      DATABASE_URL: postgresql+asyncpg://durable:durable@127.0.0.1:55435/durable_test
+      TEST_DATABASE_URL: postgresql+asyncpg://durable:durable@127.0.0.1:55435/durable_test
+      KAFKA_BOOTSTRAP_SERVERS: 127.0.0.1:19093
+      MOCK_PAYMENTS_URL: http://127.0.0.1:18001
+      PAYMENTS_DATABASE_URL: postgresql://payments:payments@127.0.0.1:55436/payments
       RUN_FAULTLAB_DOCKER: "1"
 
     steps:

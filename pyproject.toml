@@ -43,6 +43,9 @@ markers = ["integration: requires PostgreSQL", "kafka: requires real Kafka", "fa
 [tool.coverage.run]
 branch = true
 source = ["durable_agent_runtime"]
+# This module runs as a separate process inside disposable Docker sandboxes;
+# host pytest coverage cannot observe it. Real-container integration tests cover its effects.
+omit = ["src/durable_agent_runtime/coding/sandbox_tool.py"]
 
 [tool.coverage.report]
 exclude_also = ["if TYPE_CHECKING:", "if __name__ == .__main__.:"]

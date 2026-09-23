@@ -12,3 +12,6 @@ tests
 docs
 scripts
 .env
+artifacts
+.continuum
+*.log

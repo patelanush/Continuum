@@ -5,10 +5,14 @@ from durable_agent_runtime.domain.enums import (
     AgentRunStatus,
     AgentToolCallStatus,
     AgentTurnStatus,
+    ApprovalStatus,
+    CommandStatus,
     ExecutionAttemptStatus,
     ModelCallStatus,
+    SandboxStatus,
     StepStatus,
     WorkflowStatus,
+    WorkspaceStatus,
 )
 from durable_agent_runtime.domain.errors import InvalidStateTransition
 
@@ -118,3 +122,68 @@ def validate_agent_tool_call_transition(
     current: AgentToolCallStatus, target: AgentToolCallStatus
 ) -> None:
     _validate_transition("agent tool call", current, target, AGENT_TOOL_CALL_TRANSITIONS)
+
+
+WORKSPACE_TRANSITIONS: Mapping[WorkspaceStatus, frozenset[WorkspaceStatus]] = {
+    WorkspaceStatus.PENDING: frozenset(
+        {WorkspaceStatus.READY, WorkspaceStatus.FAILED, WorkspaceStatus.CANCELLED}
+    ),
+    WorkspaceStatus.READY: frozenset(
+        {WorkspaceStatus.ACTIVE, WorkspaceStatus.FAILED, WorkspaceStatus.CANCELLED}
+    ),
+    WorkspaceStatus.ACTIVE: frozenset(
+        {WorkspaceStatus.WAITING_APPROVAL, WorkspaceStatus.FAILED, WorkspaceStatus.CANCELLED}
+    ),
+    WorkspaceStatus.WAITING_APPROVAL: frozenset(
+        {WorkspaceStatus.COMPLETED, WorkspaceStatus.FAILED, WorkspaceStatus.CANCELLED}
+    ),
+    WorkspaceStatus.COMPLETED: frozenset(),
+    WorkspaceStatus.FAILED: frozenset(),
+    WorkspaceStatus.CANCELLED: frozenset(),
+}
+
+SANDBOX_TRANSITIONS: Mapping[SandboxStatus, frozenset[SandboxStatus]] = {
+    SandboxStatus.PENDING: frozenset({SandboxStatus.RUNNING, SandboxStatus.STOPPED}),
+    SandboxStatus.RUNNING: frozenset({SandboxStatus.STOPPED}),
+    SandboxStatus.STOPPED: frozenset(),
+}
+
+COMMAND_TRANSITIONS: Mapping[CommandStatus, frozenset[CommandStatus]] = {
+    CommandStatus.RUNNING: frozenset(
+        {
+            CommandStatus.SUCCEEDED,
+            CommandStatus.FAILED,
+            CommandStatus.TIMED_OUT,
+            CommandStatus.INTERRUPTED,
+        }
+    ),
+    CommandStatus.SUCCEEDED: frozenset(),
+    CommandStatus.FAILED: frozenset(),
+    CommandStatus.TIMED_OUT: frozenset(),
+    CommandStatus.INTERRUPTED: frozenset(),
+}
+
+APPROVAL_TRANSITIONS: Mapping[ApprovalStatus, frozenset[ApprovalStatus]] = {
+    ApprovalStatus.PENDING: frozenset(
+        {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED, ApprovalStatus.CANCELLED}
+    ),
+    ApprovalStatus.APPROVED: frozenset(),
+    ApprovalStatus.REJECTED: frozenset(),
+    ApprovalStatus.CANCELLED: frozenset(),
+}
+
+
+def validate_workspace_transition(current: WorkspaceStatus, target: WorkspaceStatus) -> None:
+    _validate_transition("coding workspace", current, target, WORKSPACE_TRANSITIONS)
+
+
+def validate_sandbox_transition(current: SandboxStatus, target: SandboxStatus) -> None:
+    _validate_transition("sandbox", current, target, SANDBOX_TRANSITIONS)
+
+
+def validate_command_transition(current: CommandStatus, target: CommandStatus) -> None:
+    _validate_transition("sandbox command", current, target, COMMAND_TRANSITIONS)
+
+
+def validate_approval_transition(current: ApprovalStatus, target: ApprovalStatus) -> None:
+    _validate_transition("approval", current, target, APPROVAL_TRANSITIONS)

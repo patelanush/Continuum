@@ -174,8 +174,10 @@ async def test_executor_loop_drains_inflight_work_after_stop_signal() -> None:
     )
     stop = asyncio.Event()
     settings = Settings(
-        executor_lease_seconds=0.8,
-        executor_heartbeat_seconds=0.15,
+        # Drain behavior is the invariant here; the separate heartbeat test uses
+        # sub-second leases. Leave headroom for a heavily loaded Docker CI host.
+        executor_lease_seconds=5,
+        executor_heartbeat_seconds=0.25,
         executor_poll_interval_seconds=0.05,
     )
     task = asyncio.create_task(

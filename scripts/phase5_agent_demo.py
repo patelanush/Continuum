@@ -123,7 +123,7 @@ async def run(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", choices=["fake", "ollama"], default="fake")
-    parser.add_argument("--api-url", default="http://localhost:8000")
+    parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--payments-url", default="http://localhost:8001")
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--summary-file", type=Path)

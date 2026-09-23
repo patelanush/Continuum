@@ -34,7 +34,7 @@ The service-mode controls are accepted only with `APP_ENV=faultlab`. The dispatc
 
 ## Isolation and reproduction
 
-`continuum-faultlab` is the only Compose project the controller will operate. It uses its own named volumes and host ports API `18000`, payments `18001`, Continuum PostgreSQL `55435`, payments PostgreSQL `55436`, Kafka `19093`. FaultLab cleanup removes only this project; the normal development volumes are never reset by its CLI. Destructive infrastructure scenarios are exclusive, while unique-workflow scenarios can run at bounded `--concurrency`. Unique customer IDs isolate refund counts.
+`continuum-faultlab` is the only Compose project the controller will operate. It uses its own named volumes and host ports API `28000`, payments `18001`, Continuum PostgreSQL `55435`, payments PostgreSQL `55436`, Kafka `19093`. FaultLab cleanup removes only this project; the normal development volumes are never reset by its CLI. Destructive infrastructure scenarios are exclusive, while unique-workflow scenarios can run at bounded `--concurrency`. Unique customer IDs isolate refund counts.
 
 ```bash
 uv sync
@@ -99,3 +99,23 @@ Phase 5 adds an `ai-smoke` campaign of eight scenarios. It does **not** change o
 Run `make faultlab-ai-smoke` or `uv run continuum-faultlab campaign ai-smoke --seed 42`. These are small boundary demonstrations, not another 5,000-trial reliability estimate. The real Ollama smoke is a separate optional test, excluded from CI; fake-provider correctness does not prove general model quality. Phase 5 fault hooks are environment-gated (`APP_ENV=faultlab`) and unavailable through public APIs.
 
 Clean-code-commit `afef98d` local run `bd9c0771-28c7-48cc-98c6-ed4c4f58c155` recorded 8/8 correct AI trials, four injected SIGKILLs and four recovered workflows, zero duplicate/lost refunds, and zero duplicate workflow transitions. Six workflows succeeded; the max-turn and unknown-tool scenarios correctly failed closed. Raw per-trial JSONL and generated summary remain under ignored `artifacts/faultlab/<experiment-id>/` on the test machine. These eight trials do not alter the Phase 4 campaign's denominator or guarantee future model quality.
+
+## Phase 6 coding scenarios (separate cohort)
+
+The `coding-smoke` campaign contains eleven distinct scenarios against the bundled Python fixture and real Docker sandbox. Eight inject a real executor or sandbox SIGKILL or an unexpected workspace mutation; the other three check baseline behavior, traversal rejection, and test timeout. It is not part of the Phase 4 official 5,075-trial denominator. Trial records additionally inspect one logical workspace, one patch checkpoint, a successful bounded test record, approval/commit SHA agreement, and (for patch recovery) `already_applied` on the replacement operation.
+
+| Scenario | Boundary / assertion |
+| --- | --- |
+| `coding-baseline` | inspection, patch, tests, approval, one local commit |
+| `coding-crash-after-decision` | persisted patch decision is not re-inferred after executor SIGKILL |
+| `coding-crash-after-patch` | file write exists but result missing; replacement recognizes exact after-state |
+| `coding-crash-after-tests` | successful test response lost; bounded test reruns |
+| `coding-sandbox-killed` | container SIGKILL; same volume/workspace, new sandbox |
+| `coding-executor-killed` | executor SIGKILL mid-run; replacement attempt resumes |
+| `coding-crash-before-commit` | approval committed, executor killed before Git effect |
+| `coding-crash-after-commit` | commit exists, DB SHA missing; operation trailer prevents second commit |
+| `coding-workspace-divergence` | external file mutation causes expected fail-closed workflow |
+| `coding-path-traversal` | `../../etc/passwd` read tool fails without approval/commit |
+| `coding-command-timeout` | real sandbox pytest timeout returns `timed_out` |
+
+Use `make faultlab-coding-smoke` or `uv run continuum-faultlab campaign coding-smoke --seed 42`. A development run on a dirty tree is diagnostic only. Final Phase 6 measurements, if published, must come from a clean revision and remain separate from Phase 4/5 results. The sandbox is local process isolation, not a hostile-code security certification; see [SANDBOX_SECURITY.md](SANDBOX_SECURITY.md).
