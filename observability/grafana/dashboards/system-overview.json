@@ -1,0 +1,406 @@
+{
+  "uid": "continuum-system-overview",
+  "title": "Continuum \u2014 System Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": [
+    "continuum",
+    "local"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Workflow start rate",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(continuum_workflows_started_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Workflow completions",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(continuum_workflows_completed_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Active workflows",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "continuum_active_workflows",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Pending and running attempts",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "continuum_pending_execution_attempts",
+          "refId": "A",
+          "legendFormat": "pending"
+        },
+        {
+          "expr": "continuum_running_execution_attempts",
+          "refId": "B",
+          "legendFormat": "running"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Recoveries and lease expirations",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(continuum_recoveries_total[5m]))",
+          "refId": "A",
+          "legendFormat": "recoveries {{reason}}"
+        },
+        {
+          "expr": "rate(continuum_lease_expirations_total[5m])",
+          "refId": "B",
+          "legendFormat": "lease expirations"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Kafka publish and consume",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(continuum_kafka_events_published_total[5m]))",
+          "refId": "A",
+          "legendFormat": "published"
+        },
+        {
+          "expr": "sum(rate(continuum_kafka_events_consumed_total[5m]))",
+          "refId": "B",
+          "legendFormat": "consumed"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Unpublished outbox",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "continuum_unpublished_outbox_events",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "DLQ messages",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(continuum_dlq_messages_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Model calls",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(continuum_model_calls_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Tool calls",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(continuum_tool_calls_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Sandbox commands",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(continuum_sandbox_commands_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    }
+  ]
+}

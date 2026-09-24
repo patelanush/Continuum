@@ -4,8 +4,11 @@ import asyncio
 import logging
 import os
 import signal
+from time import monotonic
+from typing import Any
 from uuid import uuid4
 
+from opentelemetry import context as otel_context
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -19,6 +22,9 @@ from durable_agent_runtime.execution.tools import (
     TransientToolError,
     execute_tool,
 )
+from durable_agent_runtime.observability.context import extract_traceparent
+from durable_agent_runtime.observability.metrics import count, duration
+from durable_agent_runtime.observability.runtime import configure, error, span
 from durable_agent_runtime.services.execution import ExecutionService, LostLease
 
 logger = logging.getLogger(__name__)
@@ -31,15 +37,62 @@ async def execute_attempt(
     sessions: async_sessionmaker[AsyncSession],
     settings: Settings,
 ) -> str:
-    """All tool I/O occurs after the claim session has committed and closed."""
-    token = attempt.lease_token
-    if token is None:
-        raise RuntimeError("A claimed attempt must have a lease token")
     async with sessions() as session:
         step = await session.scalar(select(WorkflowStep).where(WorkflowStep.id == attempt.step_id))
         if step is None:
             raise RuntimeError("Claimed step disappeared")
         step_type, step_input = step.step_type, step.input
+    attributes = {
+        "continuum.workflow.id": str(attempt.workflow_id),
+        "continuum.step.id": str(attempt.step_id),
+        "continuum.execution_attempt.id": str(attempt.id),
+        "continuum.execution_attempt.number": attempt.attempt_number,
+        "continuum.executor.id": executor_id,
+        "continuum.recovered": attempt.attempt_number > 1,
+        "continuum.step.type": step_type,
+    }
+    attached = otel_context.attach(extract_traceparent(attempt.traceparent))
+    try:
+        with span("execution.run", attributes):
+            pass
+        result = await _execute_attempt(
+            attempt,
+            step_type=step_type,
+            step_input=step_input,
+            executor_id=executor_id,
+            sessions=sessions,
+            settings=settings,
+        )
+        with span("execution.result", attributes) as active:
+            active.set_attribute("continuum.attempt.status", result)
+            active.set_attribute("continuum.lease_lost", result == "lost_lease")
+            if result == "failed":
+                error(active, "execution_failed")
+        return result
+    finally:
+        otel_context.detach(attached)
+
+
+async def _execute_attempt(
+    attempt: ExecutionAttempt,
+    *,
+    step_type: str,
+    step_input: dict[str, Any],
+    executor_id: str,
+    sessions: async_sessionmaker[AsyncSession],
+    settings: Settings,
+) -> str:
+    """All tool I/O occurs after the claim session has committed and closed."""
+    token = attempt.lease_token
+    if token is None:
+        raise RuntimeError("A claimed attempt must have a lease token")
+    began = monotonic()
+    if attempt.started_at is not None:
+        duration(
+            "continuum_execution_claim_latency_seconds",
+            (attempt.started_at - attempt.created_at).total_seconds(),
+            step_type=step_type,
+        )
     context = ExecutionContext(
         workflow_id=attempt.workflow_id,
         step_id=attempt.step_id,
@@ -68,6 +121,7 @@ async def execute_attempt(
                         lease_seconds=settings.executor_lease_seconds,
                     )
             except Exception:
+                count("continuum_heartbeats", result="error")
                 logger.exception(
                     "process_type=executor operation=heartbeat_error attempt_id=%s executor_id=%s",
                     attempt.id,
@@ -76,8 +130,10 @@ async def execute_attempt(
                 # A temporary database interruption is not proof ownership was lost.
                 continue
             if not owned:
+                count("continuum_heartbeats", result="lost_lease")
                 lost_lease.set()
                 return
+            count("continuum_heartbeats", result="ok")
 
     heartbeat_task = asyncio.create_task(beat())
     if step_type == "coding_agent":
@@ -158,19 +214,35 @@ async def execute_attempt(
         async with sessions() as session:
             service = ExecutionService(session)
             if failure:
-                await service.finalize_failure(
+                with span("execution.finalize", {"continuum.attempt.status": "failed"}):
+                    await service.finalize_failure(
+                        attempt.id,
+                        executor_id=executor_id,
+                        lease_token=token,
+                        error_code=failure.code,
+                        error_detail=str(failure),
+                    )
+                count("continuum_execution_attempts", status="failed", step_type=step_type)
+                duration(
+                    "continuum_execution_attempt_duration_seconds",
+                    monotonic() - began,
+                    step_type=step_type,
+                    status="failed",
+                )
+                return "failed"
+            with span("execution.finalize", {"continuum.attempt.status": "succeeded"}):
+                await service.finalize_success(
                     attempt.id,
                     executor_id=executor_id,
                     lease_token=token,
-                    error_code=failure.code,
-                    error_detail=str(failure),
+                    output=outcome or {},
                 )
-                return "failed"
-            await service.finalize_success(
-                attempt.id,
-                executor_id=executor_id,
-                lease_token=token,
-                output=outcome or {},
+            count("continuum_execution_attempts", status="succeeded", step_type=step_type)
+            duration(
+                "continuum_execution_attempt_duration_seconds",
+                monotonic() - began,
+                step_type=step_type,
+                status="succeeded",
             )
             return "succeeded"
     except LostLease:
@@ -221,6 +293,7 @@ async def executor_loop(
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure("continuum-executor", settings)
     executor_id = f"{os.getenv('HOSTNAME', 'executor')}-{uuid4().hex[:8]}"
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

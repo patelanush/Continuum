@@ -1,4 +1,4 @@
-.PHONY: up down reset migrate migration test test-unit test-integration test-kafka test-execution test-recovery test-payments test-agent test-coding lint format format-check typecheck check logs scale-workers scale-executors faultlab-up faultlab-smoke faultlab-ai-smoke faultlab-coding-smoke faultlab-reliability faultlab-side-effects faultlab-clean agent-demo-fake agent-demo-ollama coding-demo-fake coding-demo-ollama
+.PHONY: up down reset migrate migration test test-unit test-integration test-kafka test-execution test-recovery test-payments test-agent test-coding lint format format-check typecheck check logs scale-workers scale-executors faultlab-up faultlab-smoke faultlab-ai-smoke faultlab-coding-smoke faultlab-reliability faultlab-side-effects faultlab-clean agent-demo-fake agent-demo-ollama coding-demo-fake coding-demo-ollama observability-up observability-down observability-logs observability-check trace-demo metrics-demo recovery-trace-demo
 
 DATABASE_URL ?= postgresql+asyncpg://durable:durable@127.0.0.1:55433/durable
 TEST_DATABASE_URL ?= postgresql+asyncpg://durable:durable@127.0.0.1:55433/durable_test
@@ -7,6 +7,27 @@ FAULTLAB_TEST_DATABASE_URL = postgresql+asyncpg://durable:durable@127.0.0.1:5543
 
 up:
 	docker compose up --build -d
+
+observability-up:
+	OTEL_ENABLED=true docker compose --profile observability up --build -d
+
+observability-down:
+	docker compose --profile observability stop grafana prometheus otel-collector tempo
+
+observability-logs:
+	docker compose --profile observability logs -f otel-collector tempo prometheus grafana
+
+observability-check:
+	uv run python scripts/phase7_observability_check.py
+
+trace-demo:
+	uv run python scripts/phase7_trace_demo.py
+
+metrics-demo:
+	uv run python scripts/phase7_metrics_demo.py
+
+recovery-trace-demo:
+	uv run python scripts/phase7_recovery_demo.py
 
 scale-workers:
 	docker compose up --build -d --scale worker=3

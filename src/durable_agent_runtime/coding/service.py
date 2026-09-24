@@ -31,6 +31,13 @@ from durable_agent_runtime.domain.state_machine import (
     validate_workspace_transition,
 )
 from durable_agent_runtime.execution.tools import ExecutionContext, PermanentToolError
+from durable_agent_runtime.observability.context import (
+    current_traceparent,
+    extract_traceparent,
+    link_from_traceparent,
+)
+from durable_agent_runtime.observability.metrics import count
+from durable_agent_runtime.observability.runtime import span
 from durable_agent_runtime.services.execution import ExecutionService
 
 
@@ -349,6 +356,7 @@ class CodingService:
                     action_type="COMMIT_PATCH",
                     status=ApprovalStatus.PENDING,
                     operation_id=f"continuum:git-commit:{approval_id}",
+                    traceparent=current_traceparent(),
                     summary=final_response[:2000],
                     payload={
                         "diff_hash": workspace.diff_hash,
@@ -388,6 +396,7 @@ class CodingService:
             validate_workspace_transition(workspace.status, WorkspaceStatus.COMPLETED)
             workspace.status = WorkspaceStatus.COMPLETED
             workspace.completed_at = datetime.now(UTC)
+        count("continuum_git_commits", status="succeeded")
 
 
 class ApprovalService:
@@ -399,6 +408,7 @@ class ApprovalService:
     ) -> ApprovalRequest:
         if target not in {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}:
             raise ValueError("Only approve or reject commands are public")
+        changed = False
         async with self.session.begin():
             identity = await self.session.get(ApprovalRequest, approval_id)
             if identity is None:
@@ -415,8 +425,29 @@ class ApprovalService:
                 return request
             if workflow.status != WorkflowStatus.RUNNING:
                 raise WorkflowConflict("Cannot decide approval for a terminal workflow")
-            validate_approval_transition(request.status, target)
-            request.status = target
-            request.decided_at = datetime.now(UTC)
-            request.decision_reason = reason
-            return request
+            api_context = current_traceparent()
+            with span(
+                "approval.decision",
+                {
+                    "continuum.workflow.id": str(request.workflow_id),
+                    "continuum.approval.id": str(request.id),
+                    "continuum.approval.decision": target.value.lower(),
+                    "http.request.method": "POST",
+                },
+                context=extract_traceparent(request.traceparent)
+                if request.traceparent is not None
+                else None,
+                links=link_from_traceparent(api_context),
+            ):
+                validate_approval_transition(request.status, target)
+                request.status = target
+                request.decided_at = datetime.now(UTC)
+                request.decision_reason = reason
+                changed = True
+        if changed:
+            count(
+                "continuum_approvals",
+                action_type=request.action_type,
+                decision=target.value.lower(),
+            )
+        return request

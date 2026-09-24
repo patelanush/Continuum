@@ -5,12 +5,18 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from hashlib import sha256
 from typing import Literal
 from uuid import UUID, uuid4
 
 import asyncpg
 from fastapi import FastAPI, Header, HTTPException, Query
+from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel, Field
+
+from durable_agent_runtime.core.config import get_settings
+from durable_agent_runtime.observability.runtime import configure, error, span
 
 
 class RefundRequest(BaseModel):
@@ -41,6 +47,7 @@ def response_from_row(row: asyncpg.Record) -> RefundResponse:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    configure("continuum-mock-payments", get_settings())
     app.state.pool = await asyncpg.create_pool(
         os.environ.get(
             "PAYMENTS_DATABASE_URL",
@@ -54,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Continuum Mock Payments", lifespan=lifespan)
+FastAPIInstrumentor.instrument_app(app, exclude_spans=["receive", "send"])
 
 
 @app.get("/health/ready")
@@ -67,6 +75,22 @@ async def ready() -> dict[str, str]:
 async def create_refund(
     command: RefundRequest, idempotency_key: str = Header(min_length=1, max_length=200)
 ) -> RefundResponse:
+    with span(
+        "payment.refund",
+        {"continuum.operation.sha256": sha256(idempotency_key.encode()).hexdigest()},
+    ) as active:
+        try:
+            return await _create_refund(command, idempotency_key)
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                error(active, "external_service_error")
+            raise
+        except Exception:
+            error(active, "external_service_error")
+            raise
+
+
+async def _create_refund(command: RefundRequest, idempotency_key: str) -> RefundResponse:
     if command.faultlab_mode != "normal":
         if os.getenv("APP_ENV") != "faultlab":
             raise HTTPException(400, "Fault injection is disabled")
@@ -104,6 +128,7 @@ async def create_refund(
         await asyncio.sleep(command.delay_after_commit_ms / 1000)
     if inserted is not None and command.faultlab_mode == "error_after_commit":
         raise HTTPException(503, "FaultLab response failure after refund commit")
+    trace.get_current_span().set_attribute("continuum.external.replayed", inserted is None)
     return response_from_row(row)
 
 

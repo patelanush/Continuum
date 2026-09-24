@@ -1,0 +1,22 @@
+{
+  "workflow_id": "85215617-e169-4d5b-b272-65491fb844f7",
+  "trace_id": "5abf021097b2d1dd00c42520624c3d9d",
+  "span_count": 24,
+  "services_present": [
+    "continuum-api",
+    "continuum-dispatcher",
+    "continuum-event-worker",
+    "continuum-executor",
+    "continuum-mock-payments"
+  ],
+  "required_span_categories_present": [
+    "external.http",
+    "model.call",
+    "payment.refund",
+    "tool.call"
+  ],
+  "workflow_status": "SUCCEEDED",
+  "model_calls": 3,
+  "tool_calls": 2,
+  "refund_count": 1
+}

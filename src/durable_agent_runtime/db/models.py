@@ -208,6 +208,7 @@ class OutboxEvent(Base):
     )
     correlation_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     causation_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    traceparent: Mapped[str | None] = mapped_column(String(55))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     topic: Mapped[str] = mapped_column(String(200), nullable=False)
     message_key: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -275,6 +276,7 @@ class ExecutionAttempt(TimestampMixin, Base):
         PGUUID(as_uuid=True), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=False
     )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    traceparent: Mapped[str | None] = mapped_column(String(55))
     status: Mapped[ExecutionAttemptStatus] = mapped_column(
         Enum(
             ExecutionAttemptStatus,
@@ -655,6 +657,7 @@ class ApprovalRequest(Base):
         nullable=False,
     )
     operation_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    traceparent: Mapped[str | None] = mapped_column(String(55))
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     commit_sha: Mapped[str | None] = mapped_column(String(40))

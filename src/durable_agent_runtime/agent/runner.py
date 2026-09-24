@@ -34,6 +34,8 @@ from durable_agent_runtime.execution.tools import (
     PermanentToolError,
     TransientToolError,
 )
+from durable_agent_runtime.observability.operations import model_call, model_tokens, tool_call
+from durable_agent_runtime.observability.runtime import span
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,27 @@ async def run_support_agent(
     settings: Settings,
     provider_override: ModelProvider | None = None,
 ) -> dict[str, Any]:
+    return await _run_support_agent(
+        raw_input,
+        context,
+        executor_id=executor_id,
+        lease_token=lease_token,
+        sessions=sessions,
+        settings=settings,
+        provider_override=provider_override,
+    )
+
+
+async def _run_support_agent(
+    raw_input: dict[str, Any],
+    context: ExecutionContext,
+    *,
+    executor_id: str,
+    lease_token: UUID,
+    sessions: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    provider_override: ModelProvider | None = None,
+) -> dict[str, Any]:
     try:
         command = SupportInput.model_validate(raw_input)
     except ValidationError as exc:
@@ -94,6 +117,17 @@ async def run_support_agent(
         run_id = await AgentService(session, context, executor_id, lease_token).ensure_run(
             provider=provider_name, model=model_name, max_turns=settings.agent_max_turns
         )
+    with span(
+        "agent.run",
+        {
+            "continuum.workflow.id": str(context.workflow_id),
+            "continuum.step.id": str(context.step_id),
+            "continuum.execution_attempt.id": str(context.attempt_id),
+            "continuum.execution_attempt.number": context.attempt_number,
+            "continuum.agent_run.id": str(run_id),
+        },
+    ):
+        pass
     async with sessions() as session:
         persisted = await session.get(AgentRun, run_id)
         assert persisted is not None
@@ -142,16 +176,31 @@ async def run_support_agent(
             began = monotonic()
             raw_response: dict[str, Any] | None = None
             try:
-                result = await asyncio.wait_for(
-                    provider.generate(
-                        request, turn_number=turn_number, attempt_number=model_attempt
-                    ),
-                    timeout=settings.model_timeout_seconds,
-                )
-                raw_response = result.raw
-                decision = DECISION_ADAPTER.validate_python(result.raw)
-                if isinstance(decision, ToolDecision):
-                    validate_tool_arguments(decision.tool_name, decision.arguments)
+                with span(
+                    "agent.turn",
+                    {
+                        "continuum.agent_run.id": str(run_id),
+                        "continuum.agent_turn.id": str(turn_id),
+                    },
+                ):
+                    with model_call(call_id, provider_name, model_name, model_attempt) as active:
+                        result = await asyncio.wait_for(
+                            provider.generate(
+                                request, turn_number=turn_number, attempt_number=model_attempt
+                            ),
+                            timeout=settings.model_timeout_seconds,
+                        )
+                        raw_response = result.raw
+                        model_tokens(
+                            active,
+                            provider_name,
+                            model_name,
+                            result.prompt_tokens,
+                            result.completion_tokens,
+                        )
+                        decision = DECISION_ADAPTER.validate_python(result.raw)
+                        if isinstance(decision, ToolDecision):
+                            validate_tool_arguments(decision.tool_name, decision.arguments)
             except ProviderConfigurationError as exc:
                 async with sessions() as session:
                     await AgentService(
@@ -198,15 +247,25 @@ async def run_support_agent(
                     await AgentService(session, context, executor_id, lease_token).begin_tool(
                         tool_id
                     )
-                tool_result = await execute_agent_tool(
-                    tool_name,
-                    tool_arguments,
-                    operation_id,
-                    payments_url=settings.mock_payments_url,
-                    faultlab_delay_ms=(
-                        command.faultlab_refund_delay_ms if settings.app_env == "faultlab" else 0
-                    ),
-                )
+                with span(
+                    "agent.turn",
+                    {
+                        "continuum.agent_run.id": str(run_id),
+                        "continuum.agent_turn.id": str(turn_id),
+                    },
+                ):
+                    with tool_call(tool_id, tool_name, "idempotent"):
+                        tool_result = await execute_agent_tool(
+                            tool_name,
+                            tool_arguments,
+                            operation_id,
+                            payments_url=settings.mock_payments_url,
+                            faultlab_delay_ms=(
+                                command.faultlab_refund_delay_ms
+                                if settings.app_env == "faultlab"
+                                else 0
+                            ),
+                        )
             except PermanentToolError as exc:
                 async with sessions() as session:
                     await AgentService(session, context, executor_id, lease_token).fail_tool(

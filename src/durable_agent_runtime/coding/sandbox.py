@@ -1,12 +1,16 @@
 """Trusted Docker control plane; model actions execute only in sandbox containers."""
 
 import asyncio
+import hashlib
 import json
 import logging
+from time import monotonic
 from typing import Any
 from uuid import UUID
 
 from durable_agent_runtime.core.config import Settings
+from durable_agent_runtime.observability.metrics import count, duration
+from durable_agent_runtime.observability.runtime import error, span
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,23 @@ class DockerSandbox:
             raise ValueError("Sandbox volume does not match durable workspace identity")
 
     async def start(self) -> None:
+        began = monotonic()
+        with span(
+            "sandbox.create",
+            {
+                "continuum.workspace.id": str(self.workspace_id),
+                "continuum.sandbox.id": str(self.sandbox_id),
+            },
+        ) as active:
+            try:
+                await self._start()
+            except Exception:
+                error(active, "sandbox_unavailable")
+                raise
+            else:
+                duration("continuum_sandbox_startup_duration_seconds", monotonic() - began)
+
+    async def _start(self) -> None:
         await docker(
             "volume",
             "create",
@@ -137,12 +158,79 @@ class DockerSandbox:
         )
 
     async def stop(self) -> None:
-        try:
-            await docker("rm", "-f", self.name, timeout_seconds=15)
-        except SandboxUnavailable:
-            pass
+        with span("sandbox.destroy", {"continuum.sandbox.id": str(self.sandbox_id)}):
+            try:
+                await docker("rm", "-f", self.name, timeout_seconds=15)
+            except SandboxUnavailable:
+                pass
 
     async def call(
+        self, operation: str, request: dict[str, Any], *, timeout_seconds: float = 35
+    ) -> dict[str, Any]:
+        began = monotonic()
+        safe_operation = (
+            operation
+            if operation
+            in {
+                "prepare",
+                "fingerprint",
+                "list_files",
+                "read_file",
+                "search_files",
+                "apply_patch",
+                "run_tests",
+                "git_status",
+                "git_diff",
+                "git_commit",
+            }
+            else "other"
+        )
+        attributes: dict[str, str | int | bool] = {
+            "continuum.workspace.id": str(self.workspace_id),
+            "continuum.sandbox.id": str(self.sandbox_id),
+            "continuum.command.type": safe_operation,
+        }
+        if operation == "apply_patch" and isinstance(request.get("replacement_text"), str):
+            attributes["continuum.patch.sha256"] = hashlib.sha256(
+                request["replacement_text"].encode()
+            ).hexdigest()
+            attributes["continuum.patch.file_count"] = 1
+        with span(f"coding.{safe_operation}", attributes):
+            with span("sandbox.command", attributes) as active:
+                status = "failed"
+                try:
+                    result = await self._call(operation, request, timeout_seconds=timeout_seconds)
+                    exit_code = result.get("exit_code")
+                    if isinstance(exit_code, int):
+                        active.set_attribute("continuum.command.exit_code", exit_code)
+                    status = (
+                        "failed" if isinstance(exit_code, int) and exit_code != 0 else "succeeded"
+                    )
+                    if status == "failed":
+                        error(active, "command_failed")
+                    return result
+                except TimeoutError:
+                    status = "timeout"
+                    active.set_attribute("continuum.command.timed_out", True)
+                    error(active, "sandbox_timeout")
+                    raise
+                except Exception:
+                    status = "failed"
+                    error(active, "sandbox_error")
+                    raise
+                finally:
+                    elapsed = monotonic() - began
+                    count("continuum_sandbox_commands", command_type=operation, status=status)
+                    duration(
+                        "continuum_sandbox_command_duration_seconds",
+                        elapsed,
+                        command_type=operation,
+                        status=status,
+                    )
+                    if operation == "run_tests":
+                        duration("continuum_test_duration_seconds", elapsed, status=status)
+
+    async def _call(
         self, operation: str, request: dict[str, Any], *, timeout_seconds: float = 35
     ) -> dict[str, Any]:
         allowed = {

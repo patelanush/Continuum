@@ -4,7 +4,7 @@ A fault-tolerant execution runtime for long-running AI workflows.
 
 **What happens when an AI agent edits code, its worker dies, and its replacement cannot tell whether a patch or Git commit already happened?** Continuum keeps workflow truth in PostgreSQL, transports readiness through at-least-once Kafka, and uses durable attempts, leases, fencing, and stable operation keys. Persisted model decisions are replayed, while Phase 6 coding tools reconcile workspace/Git effects inside a restricted Docker sandbox. FaultLab injects failures and checks durable and external state. Continuum does **not** claim exactly-once model inference, distributed execution, hardened hostile-code containment, or safe automatic retries for arbitrary non-idempotent APIs.
 
-## Implemented through Phase 6
+## Implemented through Phase 7
 
 - Sequential workflow/step/attempt state machines, PostgreSQL transactions, row locks, constraints, and transition audit
 - FastAPI create/get/list/start/cancel/history API and read-only attempt diagnostics
@@ -21,6 +21,9 @@ A fault-tolerant execution runtime for long-running AI workflows.
 - Typed repository tools, bounded fixed pytest execution, durable command/checkpoint evidence, and patch/commit reconciliation after response loss
 - Durable human-approval request before a **local** Git commit, plus read-only coding diagnostics and explicit approve/reject API
 - Phase 6 coding FaultLab scenarios with real executor/sandbox SIGKILL boundaries
+- Optional local OpenTelemetry Collector, Tempo, Prometheus, and provisioned Grafana dashboards
+- W3C trace context persisted through outbox/Kafka and correlated across API, workers, executors, agents, coding sandboxes, approval, and recovery
+- Bounded operational metrics, redacted trace export, and fail-open telemetry behavior
 
 There are no paid model providers, real payments, arbitrary tool reconciliation, Redis, Kubernetes, or Kafka high-availability cluster.
 
@@ -71,6 +74,19 @@ curl http://localhost:8001/health/ready
 ```
 
 Scale normal development workers/executors with `docker compose up --build -d --scale worker=3 --scale executor=3`. `make down` retains main-stack volumes; `make reset` **deletes** those volumes. Host ports default to API `8000`, mock-payments `8001`, Continuum PostgreSQL `55433`, payments PostgreSQL `55434`, and Kafka `19092`.
+
+To inspect workflows through local traces and metrics:
+
+```bash
+make observability-up
+make observability-check
+make trace-demo
+make recovery-trace-demo
+make metrics-demo
+uv run python scripts/trace_workflow.py WORKFLOW_ID
+```
+
+Grafana is at http://127.0.0.1:3000 (`admin` / `continuum-local`, development only), Prometheus at http://127.0.0.1:9090, and Tempo at http://127.0.0.1:3200. All bind localhost by default. The optional profile is off for `make up`. See [Observability](docs/OBSERVABILITY.md), [privacy](docs/OBSERVABILITY_PRIVACY.md), and [candidate SLOs](docs/SLOS.md).
 
 For a local model, install/start Ollama separately and pull a compact model (Phase 5 validated `qwen2.5:3b`). Docker executors default to `http://host.docker.internal:11434`; override `OLLAMA_BASE_URL` and `OLLAMA_MODEL` as needed. `make agent-demo-fake` and `make coding-demo-fake` work without Ollama; the corresponding `-ollama` targets use the real local model. Model weights are not stored in this repository or downloaded in CI.
 
@@ -137,6 +153,12 @@ On clean code commit `afef98d`, the local AI smoke experiment `bd9c0771-28c7-48c
 
 The clean-revision [official campaign](benchmarks/results/phase4-summary.md) recorded **5,175 trials**: 5,075 Continuum trials (2,875 with injected faults) were classified correct, including 510 workflows expecting a refund with **zero duplicate or lost refunds**. The 100 separate, intentionally unsafe retry controls produced 100 duplicate refunds. Recovery-to-success was 2,770/2,770 where required; 100 persistent pre-commit timeout workflows correctly ended `FAILED` with no refund. Replacement-attempt recovery had a measured p95 of **5,330.51 ms** across 547 samples with a five-second test lease. See the [methodology and denominators](docs/FAULTLAB.md). These are local single-broker observations, **not** production-scale reliability guarantees.
 
+## Phase 7 local evidence
+
+A deterministic fake coding workflow produced one [70-span Tempo trace](benchmarks/results/phase7-trace-demo.json) across API, dispatcher, event worker, and executor, including model/tool, sandbox/test, approval, and local Git commit stages. Three sentinel strings placed in the task were absent from the exported spans. A [support-agent refund trace](benchmarks/results/phase7-external-trace.json) also reached the mock-payments service. A real executor SIGKILL produced [correlated attempt/recovery spans](benchmarks/results/phase7-recovery-trace.json); a [Kafka replay](benchmarks/results/phase7-duplicate-trace.json) produced one original and one duplicate consume span without a second attempt. A real [invalid event reached the DLQ](benchmarks/results/phase7-dlq-demo.json), with the Prometheus counter increasing once. A [20-workflow workload](benchmarks/results/phase7-metrics-demo.json) raised start, completion, and step counters by exactly 20 each. During a [Collector outage](benchmarks/results/phase7-telemetry-outage.json), five workflows succeeded with one attempt each, and a new trace appeared after restart.
+
+The [overhead experiment](benchmarks/results/phase7-observability-overhead.md) ran 600 identical one-step workflows in OFF, ON, OFF, ON order at 20 client concurrency with three workers and three executors. Mean run medians were 3.563 s OFF and 3.576 s ON; mean run p95 values were 4.760 s and 4.724 s; throughput was 5.048 and 5.093 workflows/s. These local values include scheduling and polling noise and do not establish a production SLO. Full method and raw run summaries are in the [JSON artifact](benchmarks/results/phase7-observability-overhead.json).
+
 ## Tests
 
 ```bash
@@ -149,6 +171,6 @@ make test-kafka
 
 ## Planned
 
-Arbitrary non-idempotent tool reconciliation, remote Git push/PR effects, production authorization, hardened hostile-code containment, OpenTelemetry, Kubernetes, and broker HA remain unimplemented.
+Arbitrary non-idempotent tool reconciliation, remote Git push/PR effects, production authorization, hardened hostile-code containment, Kubernetes, and broker HA remain unimplemented.
 
-See [Architecture](docs/ARCHITECTURE.md), [Durable agents](docs/AGENTS.md), [Coding agent](docs/CODING_AGENT.md), [Sandbox security](docs/SANDBOX_SECURITY.md), [Design Decisions](docs/DESIGN_DECISIONS.md), [Failure Model](docs/FAILURE_MODEL.md), and [FaultLab methodology](docs/FAULTLAB.md).
+See [Architecture](docs/ARCHITECTURE.md), [Durable agents](docs/AGENTS.md), [Coding agent](docs/CODING_AGENT.md), [Sandbox security](docs/SANDBOX_SECURITY.md), [Observability](docs/OBSERVABILITY.md), [Design Decisions](docs/DESIGN_DECISIONS.md), [Failure Model](docs/FAILURE_MODEL.md), and [FaultLab methodology](docs/FAULTLAB.md).

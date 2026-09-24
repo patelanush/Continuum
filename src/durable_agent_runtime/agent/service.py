@@ -41,6 +41,7 @@ from durable_agent_runtime.domain.state_machine import (
     validate_model_call_transition,
 )
 from durable_agent_runtime.execution.tools import ExecutionContext, PermanentToolError, RetrySafety
+from durable_agent_runtime.observability.metrics import count
 from durable_agent_runtime.services.execution import ExecutionService, LostLease
 
 
@@ -140,6 +141,8 @@ class AgentService:
     async def start_model_call(
         self, run_id: UUID, max_attempts: int
     ) -> tuple[UUID, dict[str, Any], int] | None:
+        exhausted_agent_type: str | None = None
+        started: tuple[UUID, dict[str, Any], int] | None = None
         async with self.session.begin():
             await self._fence()
             run = await self.session.scalar(
@@ -177,38 +180,42 @@ class AgentService:
                 run.error_code = "MODEL_ATTEMPTS_EXHAUSTED"
                 run.error_detail = "No valid structured decision within bounded model attempts"
                 run.completed_at = datetime.now(UTC)
-                return None
-            request = dict(turn.model_request)
-            invalid = next(
-                (
-                    item
-                    for item in reversed(calls)
-                    if item.error_code in {"ValidationError", "ValueError"}
-                ),
-                None,
-            )
-            if invalid is not None:
-                request["messages"] = [
-                    *request["messages"],
-                    {
-                        "role": "user",
-                        "content": "Previous JSON decision was rejected. Correct it. "
-                        f"Validation error: {invalid.error_detail}",
-                    },
-                ]
-            call = ModelCall(
-                id=uuid4(),
-                agent_turn_id=turn.id,
-                attempt_number=len(calls) + 1,
-                status=ModelCallStatus.RUNNING,
-                provider=run.provider,
-                model=run.model,
-                request=request,
-                request_hash=canonical_hash(request),
-                started_at=datetime.now(UTC),
-            )
-            self.session.add(call)
-            return call.id, request, call.attempt_number
+                exhausted_agent_type = run.agent_type
+            else:
+                request = dict(turn.model_request)
+                invalid = next(
+                    (
+                        item
+                        for item in reversed(calls)
+                        if item.error_code in {"ValidationError", "ValueError"}
+                    ),
+                    None,
+                )
+                if invalid is not None:
+                    request["messages"] = [
+                        *request["messages"],
+                        {
+                            "role": "user",
+                            "content": "Previous JSON decision was rejected. Correct it. "
+                            f"Validation error: {invalid.error_detail}",
+                        },
+                    ]
+                call = ModelCall(
+                    id=uuid4(),
+                    agent_turn_id=turn.id,
+                    attempt_number=len(calls) + 1,
+                    status=ModelCallStatus.RUNNING,
+                    provider=run.provider,
+                    model=run.model,
+                    request=request,
+                    request_hash=canonical_hash(request),
+                    started_at=datetime.now(UTC),
+                )
+                self.session.add(call)
+                started = call.id, request, call.attempt_number
+        if exhausted_agent_type is not None:
+            count("continuum_agent_runs", status="failed", agent_type=exhausted_agent_type)
+        return started
 
     async def fail_model_call(
         self, call_id: UUID, code: str, detail: str, raw: dict[str, Any] | None = None
@@ -256,6 +263,7 @@ class AgentService:
             run.error_code = code
             run.error_detail = detail[:2000]
             run.completed_at = datetime.now(UTC)
+        count("continuum_agent_runs", status="failed", agent_type=run.agent_type)
 
     async def persist_decision(
         self,
@@ -333,10 +341,13 @@ class AgentService:
                     )
                 )
                 self._turn_status(turn, AgentTurnStatus.TOOL_PENDING)
+        if isinstance(decision, FinalDecision):
+            count("continuum_agent_runs", status="succeeded", agent_type=run.agent_type)
 
     async def persist_tool_result(
         self, run_id: UUID, tool_id: UUID, result: dict[str, Any]
     ) -> None:
+        max_turns_agent_type: str | None = None
         async with self.session.begin():
             await self._fence()
             run = await self.session.scalar(
@@ -371,31 +382,34 @@ class AgentService:
                 run.error_code = "MAX_AGENT_TURNS_EXCEEDED"
                 run.error_detail = "Model did not return a final response by the turn limit"
                 run.completed_at = datetime.now(UTC)
-                return
-            prior_turns = list(
-                await self.session.scalars(
-                    select(AgentTurn)
-                    .where(AgentTurn.agent_run_id == run_id)
-                    .order_by(AgentTurn.turn_number)
+                max_turns_agent_type = run.agent_type
+            else:
+                prior_turns = list(
+                    await self.session.scalars(
+                        select(AgentTurn)
+                        .where(AgentTurn.agent_run_id == run_id)
+                        .order_by(AgentTurn.turn_number)
+                    )
                 )
-            )
-            history: list[dict[str, Any]] = []
-            for prior in prior_turns:
-                prior_tool = await self.session.scalar(
-                    select(AgentToolCall).where(AgentToolCall.agent_turn_id == prior.id)
-                )
-                history.append(
-                    {
-                        "decision": prior.decision,
-                        "tool_result": prior_tool.result if prior_tool else None,
-                    }
-                )
-            step = await self.session.get(WorkflowStep, run.step_id)
-            assert step is not None
-            next_number = turn.turn_number + 1
-            request = self._request(step.input, history, run.system_prompt_version)
-            self.session.add(self._new_turn(run_id, next_number, request))
-            run.current_turn_number = next_number
+                history: list[dict[str, Any]] = []
+                for prior in prior_turns:
+                    prior_tool = await self.session.scalar(
+                        select(AgentToolCall).where(AgentToolCall.agent_turn_id == prior.id)
+                    )
+                    history.append(
+                        {
+                            "decision": prior.decision,
+                            "tool_result": prior_tool.result if prior_tool else None,
+                        }
+                    )
+                step = await self.session.get(WorkflowStep, run.step_id)
+                assert step is not None
+                next_number = turn.turn_number + 1
+                request = self._request(step.input, history, run.system_prompt_version)
+                self.session.add(self._new_turn(run_id, next_number, request))
+                run.current_turn_number = next_number
+        if max_turns_agent_type is not None:
+            count("continuum_agent_runs", status="failed", agent_type=max_turns_agent_type)
 
     async def begin_tool(self, tool_id: UUID) -> None:
         async with self.session.begin():
@@ -444,6 +458,7 @@ class AgentService:
             run.error_code = code
             run.error_detail = detail[:2000]
             run.completed_at = datetime.now(UTC)
+        count("continuum_agent_runs", status="failed", agent_type=run.agent_type)
 
     @staticmethod
     def _request(

@@ -41,6 +41,9 @@ from durable_agent_runtime.execution.tools import (
     PermanentToolError,
     TransientToolError,
 )
+from durable_agent_runtime.observability.metrics import count
+from durable_agent_runtime.observability.operations import model_call, model_tokens, tool_call
+from durable_agent_runtime.observability.runtime import span
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +94,27 @@ async def run_coding_agent(
     settings: Settings,
     provider_override: ModelProvider | None = None,
 ) -> dict[str, Any]:
+    return await _run_coding_agent(
+        raw_input,
+        context,
+        executor_id=executor_id,
+        lease_token=lease_token,
+        sessions=sessions,
+        settings=settings,
+        provider_override=provider_override,
+    )
+
+
+async def _run_coding_agent(
+    raw_input: dict[str, Any],
+    context: ExecutionContext,
+    *,
+    executor_id: str,
+    lease_token: UUID,
+    sessions: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    provider_override: ModelProvider | None = None,
+) -> dict[str, Any]:
     try:
         command = CodingInput.model_validate(raw_input)
     except ValidationError as exc:
@@ -126,6 +150,18 @@ async def run_coding_agent(
         workspace_id = await CodingService(
             session, context, executor_id, lease_token
         ).ensure_workspace(run_id, command.repository, ["pytest", "-q"], settings)
+    with span(
+        "agent.run",
+        {
+            "continuum.workflow.id": str(context.workflow_id),
+            "continuum.step.id": str(context.step_id),
+            "continuum.execution_attempt.id": str(context.attempt_id),
+            "continuum.execution_attempt.number": context.attempt_number,
+            "continuum.agent_run.id": str(run_id),
+            "continuum.workspace.id": str(workspace_id),
+        },
+    ):
+        pass
     async with sessions() as session:
         workspace = await session.get(CodingWorkspace, workspace_id)
         assert workspace is not None
@@ -145,13 +181,14 @@ async def run_coding_agent(
                 await CodingService(session, context, executor_id, lease_token).sandbox_started(
                     sandbox_id
                 )
-            prepared = await sandbox.call(
-                "prepare",
-                {
-                    "repository": command.repository,
-                    "initialize_if_missing": initialize_if_missing,
-                },
-            )
+            with span("workspace.prepare", {"continuum.workspace.id": str(workspace_id)}):
+                prepared = await sandbox.call(
+                    "prepare",
+                    {
+                        "repository": command.repository,
+                        "initialize_if_missing": initialize_if_missing,
+                    },
+                )
             async with sessions() as session:
                 await CodingService(session, context, executor_id, lease_token).record_prepared(
                     workspace_id, prepared
@@ -177,20 +214,25 @@ async def run_coding_agent(
                     and approval.status == ApprovalStatus.APPROVED
                     and prepared["head_operation_id"] == approval.operation_id
                 )
-                if (
-                    workspace.current_git_head != prepared["git_head"]
-                    and not committed_before_response
-                ):
-                    raise PermanentToolError(
-                        "WORKSPACE_RECONCILIATION_FAILED",
-                        "Git HEAD differs from durable checkpoint",
-                    )
-                if workspace.tree_hash != prepared["tree_hash"] and not pending_patch:
-                    raise PermanentToolError(
-                        "WORKSPACE_RECONCILIATION_FAILED",
-                        "Actual workspace differs from durable checkpoint",
-                    )
+                with span("workspace.reconcile", {"continuum.workspace.id": str(workspace_id)}):
+                    if (
+                        workspace.current_git_head != prepared["git_head"]
+                        and not committed_before_response
+                    ):
+                        count("continuum_workspace_reconciliations", result="failed")
+                        raise PermanentToolError(
+                            "WORKSPACE_RECONCILIATION_FAILED",
+                            "Git HEAD differs from durable checkpoint",
+                        )
+                    if workspace.tree_hash != prepared["tree_hash"] and not pending_patch:
+                        count("continuum_workspace_reconciliations", result="failed")
+                        raise PermanentToolError(
+                            "WORKSPACE_RECONCILIATION_FAILED",
+                            "Actual workspace differs from durable checkpoint",
+                        )
+                    count("continuum_workspace_reconciliations", result="succeeded")
         except SandboxOperationRejected as exc:
+            count("continuum_workspace_reconciliations", result="failed")
             raise PermanentToolError("WORKSPACE_RECONCILIATION_FAILED", str(exc)) from exc
         except (SandboxUnavailable, TimeoutError) as exc:
             raise TransientToolError("Sandbox preparation unavailable") from exc
@@ -220,24 +262,43 @@ async def run_coding_agent(
                 raw_response: dict[str, Any] | None = None
                 model_started = monotonic()
                 try:
-                    result = await asyncio.wait_for(
-                        provider.generate(
-                            request, turn_number=turn_number, attempt_number=model_attempt
-                        ),
-                        timeout=settings.model_timeout_seconds,
-                    )
-                    raw_response = result.raw
-                    decision = DECISION_ADAPTER.validate_python(result.raw)
-                    if isinstance(decision, ToolDecision):
-                        validate_coding_arguments(decision.tool_name, decision.arguments)
-                    elif isinstance(decision, FinalDecision):
-                        try:
-                            async with sessions() as session:
-                                await CodingService(
-                                    session, context, executor_id, lease_token
-                                ).verify_ready_for_final(workspace_id)
-                        except PermanentToolError as exc:
-                            raise ValueError(f"Premature final decision: {exc.code}") from exc
+                    with span(
+                        "agent.turn",
+                        {
+                            "continuum.agent_run.id": str(run_id),
+                            "continuum.agent_turn.id": str(turn.id),
+                        },
+                    ):
+                        with model_call(
+                            call_id, provider_name, model_name, model_attempt
+                        ) as active:
+                            result = await asyncio.wait_for(
+                                provider.generate(
+                                    request, turn_number=turn_number, attempt_number=model_attempt
+                                ),
+                                timeout=settings.model_timeout_seconds,
+                            )
+                            raw_response = result.raw
+                            model_tokens(
+                                active,
+                                provider_name,
+                                model_name,
+                                result.prompt_tokens,
+                                result.completion_tokens,
+                            )
+                            decision = DECISION_ADAPTER.validate_python(result.raw)
+                            if isinstance(decision, ToolDecision):
+                                validate_coding_arguments(decision.tool_name, decision.arguments)
+                            elif isinstance(decision, FinalDecision):
+                                try:
+                                    async with sessions() as session:
+                                        await CodingService(
+                                            session, context, executor_id, lease_token
+                                        ).verify_ready_for_final(workspace_id)
+                                except PermanentToolError as exc:
+                                    raise ValueError(
+                                        f"Premature final decision: {exc.code}"
+                                    ) from exc
                 except ProviderConfigurationError as exc:
                     async with sessions() as session:
                         await AgentService(
@@ -304,11 +365,19 @@ async def run_coding_agent(
                             tool_name,
                             (settings.coding_command_timeout_seconds + 10) * 1000,
                         )
-                    tool_result = await sandbox.call(
-                        tool_name,
-                        arguments,
-                        timeout_seconds=settings.coding_command_timeout_seconds + 10,
-                    )
+                    with span(
+                        "agent.turn",
+                        {
+                            "continuum.agent_run.id": str(run_id),
+                            "continuum.agent_turn.id": str(turn.id),
+                        },
+                    ):
+                        with tool_call(tool_id, tool_name, "reconcilable"):
+                            tool_result = await sandbox.call(
+                                tool_name,
+                                arguments,
+                                timeout_seconds=settings.coding_command_timeout_seconds + 10,
+                            )
                     if tool_name == "apply_patch":
                         await faultlab_pause(settings, "FAULTLAB_CODING_PAUSE_AFTER_PATCH")
                     if tool_name == "run_tests":
@@ -337,10 +406,11 @@ async def run_coding_agent(
                     raise TransientToolError("Sandbox tool unavailable") from exc
             raise PermanentToolError("AGENT_STATE_INVALID", f"Turn is {turn_status}")
 
-        async with sessions() as session:
-            approval_id = await CodingService(
-                session, context, executor_id, lease_token
-            ).request_approval(workspace_id, final_response)
+        with span("approval.wait", {"continuum.workspace.id": str(workspace_id)}):
+            async with sessions() as session:
+                approval_id = await CodingService(
+                    session, context, executor_id, lease_token
+                ).request_approval(workspace_id, final_response)
         await faultlab_pause(settings, "FAULTLAB_CODING_PAUSE_BEFORE_APPROVAL")
         while True:
             async with sessions() as session:
@@ -366,18 +436,29 @@ async def run_coding_agent(
                 session, context, executor_id, lease_token
             ).begin_command(workspace_id, None, "git_commit", 35_000)
         try:
-            commit_result = await sandbox.call(
-                "git_commit",
+            with span(
+                "git.commit",
                 {
-                    "operation_id": operation_id,
-                    "expected_tree_hash": expected_tree_hash,
-                    "expected_git_head": expected_git_head,
-                    "message": "Fix checkout discount calculation",
+                    "continuum.workflow.id": str(context.workflow_id),
+                    "continuum.workspace.id": str(workspace_id),
+                    "continuum.approval.id": str(approval_id),
                 },
-            )
+            ) as commit_span:
+                commit_result = await sandbox.call(
+                    "git_commit",
+                    {
+                        "operation_id": operation_id,
+                        "expected_tree_hash": expected_tree_hash,
+                        "expected_git_head": expected_git_head,
+                        "message": "Fix checkout discount calculation",
+                    },
+                )
+                commit_span.set_attribute("continuum.commit.sha", commit_result["commit_sha"])
         except SandboxOperationRejected as exc:
+            count("continuum_git_commits", status="failed")
             raise PermanentToolError("COMMIT_RECONCILIATION_FAILED", str(exc)) from exc
         except (SandboxUnavailable, TimeoutError) as exc:
+            count("continuum_git_commits", status="failed")
             raise TransientToolError("Sandbox commit unavailable") from exc
         await faultlab_pause(settings, "FAULTLAB_CODING_PAUSE_AFTER_COMMIT")
         async with sessions() as session:

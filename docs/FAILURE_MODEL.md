@@ -76,3 +76,15 @@ The final clean-revision [FaultLab campaign](../benchmarks/results/phase4-summar
 - Approval is durably required before a **local** commit, but its development API has no authentication or human identity. An already in-flight patch/commit cannot be undone by cancellation. The executor currently remains leased while waiting for a decision.
 - Git/file reconciliation fails closed on unexpected workspace changes. It is not a general distributed filesystem transaction. A stale in-flight Docker operation around lease turnover warrants stronger per-workspace effect fencing before untrusted concurrent workloads.
 - Phase 4 official benchmark numbers predate Phases 5–6. Coding FaultLab smoke is a separate boundary validation, not an addition to the 5,075-trial reliability percentage.
+
+## Phase 7 observational failures
+
+- **Collector unavailable:** The batch exporter times out and may discard spans/metrics; workflow transactions, Kafka progress, and execution continue. A local test stopped the Collector during five workflows and observed all five succeed with one attempt each. A new trace appeared after restart.
+- **Tempo unavailable:** The Collector may fail to forward or drop traces. Workflow execution does not call Tempo. Durable state remains queryable.
+- **Prometheus or Grafana unavailable:** Dashboards and metric queries disappear temporarily; neither is on the execution path.
+- **Export queue saturation:** The bounded batch queue may discard spans. It does not hold database locks or block business operations waiting for remote export.
+- **Malformed trace headers or persisted context:** Validation drops the relation and starts fresh context. The event is still parsed, deduped, and acknowledged according to its business envelope. A local malformed-header replay left one completed attempt.
+- **Exporter loss near a durable commit:** Counters and traces are best-effort observations and may not exactly equal the durable ledger after a process crash. Investigate with PostgreSQL attempts/transitions and external effect IDs.
+- **Privacy regression:** The central exporter allowlist strips unknown attributes, events, and status text. A sentinel unit test and a real Tempo coding trace check for prompt/source/API-key sentinels.
+
+The Phase 7 trace and overhead artifacts are separate from the official Phase 4 FaultLab campaign. The telemetry stack is local and optional; it adds no Kubernetes or broker availability guarantee.

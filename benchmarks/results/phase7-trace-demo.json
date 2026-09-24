@@ -1,0 +1,37 @@
+{
+  "source_base_commit": "7878113ce8e67cd4420cb90ebd2aeabfad642c68",
+  "workflow_id": "2cfee345-8bff-4ccb-8917-e932ae43124e",
+  "trace_id": "ba5289854ce2bb949c2b505e51a0c77",
+  "span_count": 70,
+  "services_present": [
+    "continuum-api",
+    "continuum-dispatcher",
+    "continuum-event-worker",
+    "continuum-executor"
+  ],
+  "required_span_categories_present": [
+    "agent_run",
+    "agent_turn",
+    "api_start",
+    "approval_decision",
+    "approval_wait",
+    "execution_attempt",
+    "execution_claim",
+    "git_commit",
+    "kafka_consume",
+    "kafka_publish",
+    "model_call",
+    "patch",
+    "sandbox_command",
+    "tests",
+    "tool_call"
+  ],
+  "workflow_status": "SUCCEEDED",
+  "model_provider": "fake",
+  "tool_count": 6,
+  "sandbox_commands": 13,
+  "approval_id": "62f74da4-b9ab-4f3d-b50c-dac463c9756b",
+  "commit_sha": "6e443615abba104b7f6e96929e7fd283fd5b9bee",
+  "recovered": false,
+  "redaction_sentinels_absent": true
+}

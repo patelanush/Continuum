@@ -1,0 +1,30 @@
+{
+  "fault": "SIGKILL executor during slow_noop",
+  "workflow_id": "3d21617a-8844-4c1c-a9df-ed56c6d82e01",
+  "trace_id": "af9e6dd9ba0d1702c670f697e27b7264",
+  "span_count": 14,
+  "services_present": [
+    "continuum-api",
+    "continuum-dispatcher",
+    "continuum-event-worker",
+    "continuum-executor",
+    "continuum-recovery"
+  ],
+  "attempt_1": {
+    "id": "97dbd339-8562-474f-9329-688a9c2fb7d0",
+    "status": "EXPIRED"
+  },
+  "attempt_2": {
+    "id": "197bc877-0c62-4733-b16c-16e412b43f67",
+    "status": "SUCCEEDED"
+  },
+  "recovery_spans_present": [
+    "execution.result",
+    "execution.run",
+    "recovery.create_replacement",
+    "recovery.expire_attempt"
+  ],
+  "workflow_status": "SUCCEEDED",
+  "recovery_metric_delta": 1,
+  "lease_expiration_metric_delta": 1
+}

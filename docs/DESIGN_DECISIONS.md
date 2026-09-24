@@ -392,3 +392,35 @@ Python replacement text is parsed before the model decision is accepted and agai
 **Reason:** Model completion is not human authorization to publish a code change. Approval is a durable transaction boundary; the commit operation has its own stable identity for response-loss recovery.
 
 **Tradeoff:** Approval waiting currently holds an executor lease and the development API is unauthenticated. Production use needs identity/authorization and a suspended-attempt state to release capacity. The code sandbox is not a substitute for human review.
+
+## Phase 7: OpenTelemetry with local Tempo, Prometheus, and Grafana
+
+**Decision:** Use the OpenTelemetry SDK/OTLP for trace and metric generation, a local Collector for routing, Tempo for trace storage, Prometheus for operational time series, and source-controlled Grafana provisioning. Keep the stack behind an optional Compose profile.
+
+**Reason:** OTel gives a shared trace context and service identity across Python processes. Tempo is a lightweight local trace backend, Prometheus supports bounded rate/backlog queries and alerts, and Grafana provides one inspectable UI. The optional profile leaves normal development and CI lightweight. No paid service is needed.
+
+**Tradeoff:** This is one local trace backend and one Prometheus process, not a highly available telemetry deployment. Exact Kafka consumer lag is not exported. Grafana's local password and localhost-only ports are development settings.
+
+## Durable W3C context and asynchronous links
+
+**Decision:** Persist only a validated W3C `traceparent` on outbox events, execution attempts, and approval requests. Inject it into Kafka headers without changing the event JSON. Use short spans and span links for recovery and later approval actions.
+
+**Reason:** A dispatcher, worker, replacement executor, or approver may run after the originating call is gone. In-memory context alone cannot cross these durable boundaries. A replacement is causally related to the dead attempt, but it is a new execution and should remain distinguishable.
+
+**Tradeoff:** A sampled-out or lost exporter batch can leave gaps. A trace is diagnostic context, while workflow/step/attempt IDs remain the durable identities. Malformed context starts a fresh trace and never changes event processing.
+
+## Bounded telemetry and central redaction
+
+**Decision:** Strip all unapproved span attributes, events, and status text before OTLP export. Exclude prompts, model responses, customer/refund data, source/patch text, command output, credentials, and arbitrary exception strings. Put durable IDs in traces, never metric labels. Bound configurable metric dimensions to `other`.
+
+**Reason:** Trace search needs IDs, while Prometheus series cardinality and privacy require small bounded labels. Raw agent/coding content can carry secrets. A central exporter policy protects against accidental attributes from automatic instrumentation.
+
+**Tradeoff:** Some debugging requires consulting the durable record or sandbox artifact under its separate access controls. SQLAlchemy auto-instrumentation is opt-in because a real coding trace generated about 600 SQL spans; high-level transaction spans are the local default.
+
+## Telemetry is outside correctness
+
+**Decision:** Batch span export with a bounded queue and timeout. Export metrics periodically. Never make a workflow transaction, Kafka acknowledgement, model/tool result, or lease depend on Collector/Tempo/Prometheus/Grafana availability. Count recurring heartbeats instead of emitting a span for each.
+
+**Reason:** Telemetry outages and backpressure must not become workflow outages or lock regressions. A real Collector stop test completed five workflows and a post-restart workflow produced a new Tempo trace.
+
+**Tradeoff:** Telemetry can be lost during an outage, and counters can miss an event if a process dies just after its durable commit. PostgreSQL and external effect state remain the audit authority. Local 100% sampling is a development default only.

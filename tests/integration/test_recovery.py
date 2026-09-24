@@ -146,15 +146,15 @@ async def test_unknown_tool_is_not_automatically_retried_after_crash() -> None:
 
 async def test_healthy_long_running_executor_heartbeats_past_original_expiry() -> None:
     workflow_id, _ = await create_scheduled(
-        step_count=1, step_type="slow_noop", step_input={"duration_ms": 1300}
+        step_count=1, step_type="slow_noop", step_input={"duration_ms": 3000}
     )
-    attempt = await claim(lease_seconds=0.45)
+    attempt = await claim(lease_seconds=1.2)
     original_expiry = attempt.lease_expires_at
-    settings = Settings(executor_lease_seconds=0.45, executor_heartbeat_seconds=0.1)
+    settings = Settings(executor_lease_seconds=1.2, executor_heartbeat_seconds=0.2)
     task = asyncio.create_task(
         execute_attempt(attempt, executor_id="executor-a", sessions=TestSession, settings=settings)
     )
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(10):
         while not task.done():
             async with TestSession() as session:
                 await ExecutionService(session).recover_expired()

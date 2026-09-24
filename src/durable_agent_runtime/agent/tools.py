@@ -1,11 +1,14 @@
 """Allowlisted agent tools; external HTTP is never called in a DB transaction."""
 
 from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 from typing import Any
 
 import httpx
 
 from durable_agent_runtime.execution.tools import PermanentToolError, TransientToolError
+from durable_agent_runtime.observability.context import current_traceparent
+from durable_agent_runtime.observability.runtime import span
 
 POLICY = {
     "policy_version": "v1",
@@ -29,12 +32,22 @@ async def execute_agent_tool(
     if faultlab_delay_ms:
         body["delay_after_commit_ms"] = faultlab_delay_ms
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.post(
-                f"{payments_url.rstrip('/')}/refunds",
-                headers={"Idempotency-Key": operation_id},
-                json=body,
-            )
+        with span(
+            "external.http",
+            {
+                "http.request.method": "POST",
+                "continuum.operation.sha256": sha256(operation_id.encode()).hexdigest(),
+            },
+        ) as active:
+            headers = {"Idempotency-Key": operation_id}
+            traceparent = current_traceparent()
+            if traceparent is not None:
+                headers["traceparent"] = traceparent
+            async with httpx.AsyncClient(timeout=45) as client:
+                response = await client.post(
+                    f"{payments_url.rstrip('/')}/refunds", headers=headers, json=body
+                )
+            active.set_attribute("http.response.status_code", response.status_code)
         if response.status_code in {408, 429} or response.status_code >= 500:
             raise TransientToolError(f"Payments HTTP {response.status_code}")
         if response.status_code >= 400:

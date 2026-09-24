@@ -89,3 +89,22 @@ The workspace ID is unique per coding step; sandbox IDs are per outer attempt. O
 The coding prompt and tool registry restrict model actions to file listing/reading/search, one typed full-file replacement, fixed pytest execution, and Git status/diff. `SandboxCommand` records the intent before Docker I/O. Every mutation compares the durable checkpoint's file map/tree hash to actual Git workspace state. A completed patch whose DB result was lost is recognized from its exact after-state; unexplained divergence fails closed. Tests can be repeated after a crash. An approval request is persisted only after a passing test record newer than the mutation checkpoint. The approval API commits `APPROVED` before the sandbox makes a local Git commit. A lost commit response is reconciled by the exact `Continuum-Operation-ID` trailer in HEAD, not by approximate message matching.
 
 The existing outer lease/heartbeat/token fences every checkpoint and finalization, and the model decision is not regenerated after persistence. A late process can still briefly have in-flight Docker work during lease turnover; replacement sandboxes stop prior same-workspace containers and verify fingerprints. This local design should be hardened with a single durable workspace-effect ownership protocol before concurrent coding agents or untrusted multi-tenant execution. Approval waiting currently occupies an executor lease, a capacity limitation rather than a correctness claim. Details: [Coding agent](CODING_AGENT.md) and [Sandbox security](SANDBOX_SECURITY.md).
+
+## Phase 7: observational path
+
+```mermaid
+flowchart LR
+  API[API] -->|persist traceparent| OB[(Outbox)]
+  OB -->|Kafka traceparent header| W[Event worker]
+  W -->|persist attempt context| E[Executor / agent / sandbox]
+  E -->|OTLP| C[OpenTelemetry Collector]
+  API -->|OTLP| C
+  W -->|OTLP| C
+  R[Recovery scheduler] -->|OTLP| C
+  C --> T[(Tempo traces)]
+  C --> P[Prometheus scrape endpoint]
+  P --> G[Grafana]
+  T --> G
+```
+
+Telemetry is outside the transaction, lease, and side-effect correctness path. Validated W3C context is stored only where an asynchronous handoff must survive process death: outbox event, execution attempt, and approval request. Kafka business envelopes and dedupe keys are unchanged. Short spans represent work; a coding approval or crashed executor does not hold an open span. Replacement attempts and resumed approval actions use durable context and links to preserve causality. Source, prompt, payment, and command content is removed before export. The optional Compose profile and verification commands are in [Observability](OBSERVABILITY.md).

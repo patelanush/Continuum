@@ -11,6 +11,7 @@ from durable_agent_runtime.coding.service import ApprovalService
 from durable_agent_runtime.db.models import ApprovalRequest, CodingWorkspace
 from durable_agent_runtime.domain.enums import ApprovalStatus
 from durable_agent_runtime.domain.errors import ApprovalNotFound, WorkflowNotFound
+from durable_agent_runtime.observability.runtime import span
 from durable_agent_runtime.schemas.coding import (
     ApprovalDecision,
     ApprovalResponse,
@@ -44,18 +45,20 @@ async def get_approval(approval_id: UUID, session: DatabaseSession) -> object:
 async def approve(
     approval_id: UUID, session: DatabaseSession, body: ApprovalDecision | None = None
 ) -> object:
-    return await ApprovalService(session).decide(
-        approval_id, ApprovalStatus.APPROVED, reason=body.reason if body else None
-    )
+    with span("api.approval.approve", {"continuum.approval.id": str(approval_id)}):
+        return await ApprovalService(session).decide(
+            approval_id, ApprovalStatus.APPROVED, reason=body.reason if body else None
+        )
 
 
 @router.post("/approvals/{approval_id}/reject", response_model=ApprovalResponse)
 async def reject(
     approval_id: UUID, session: DatabaseSession, body: ApprovalDecision | None = None
 ) -> object:
-    return await ApprovalService(session).decide(
-        approval_id, ApprovalStatus.REJECTED, reason=body.reason if body else None
-    )
+    with span("api.approval.reject", {"continuum.approval.id": str(approval_id)}):
+        return await ApprovalService(session).decide(
+            approval_id, ApprovalStatus.REJECTED, reason=body.reason if body else None
+        )
 
 
 @router.get("/workflows/{workflow_id}/coding", response_model=list[CodingWorkspaceResponse])

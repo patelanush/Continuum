@@ -1,0 +1,11 @@
+# Observability privacy policy
+
+All span attributes pass through `safe_trace_attributes`, then `RedactingSpanExporter` applies the allowlist again immediately before OTLP encoding. Allowed identifier fields must parse as UUIDs, hashes have fixed hexadecimal lengths, and user configurable type/provider/model fields map unknown values to `other`. Span events and status descriptions are discarded. Resource attributes are fixed service name, version, and environment. Instrumentation may create additional HTTP or SQL attributes internally, but the exporter drops everything outside the allowlist.
+
+**Allowed:** durable UUIDs and bounded operational IDs for trace search; step/workflow/event/tool/command types; status and bounded error category; attempt number; executor ID; Kafka topic/partition/offset/key; model provider/name and token counts; operation and patch SHA-256; changed-file count; test pass/fail counts; command exit code and timeout flag; Git commit SHA; approved standard HTTP and DB metadata. IDs and SHA values belong in traces and logs, never Prometheus labels.
+
+**Never export:** model prompts or responses, support/customer messages, refund payloads, source files, repository paths, patches, command stdout/stderr, tool results, environment variables, credentials, API keys, Git remote credentials, SQL parameter values, arbitrary exception messages, HTTP bodies, or request query strings. A source filename can be user controlled and is not a metric label. Do not add these fields to the allowlist.
+
+Prometheus label schemas are declared centrally in `src/durable_agent_runtime/observability/metrics.py`. They use bounded workflow/step/event/tool/command/provider/model/status/reason classes. Arbitrary configured names map to `other`. No workflow, attempt, agent, workspace, customer, trace, or commit ID is a label. A unit test rejects forbidden label keys; a live coding trace demo puts `SUPER_SECRET_PROMPT_VALUE`, `PRIVATE_SOURCE_CONTENT`, and `FAKE_API_KEY_123` in workflow input and checks exported Tempo spans for their absence.
+
+The local telemetry ports and Grafana development password are suitable only for an isolated developer machine. Production exposure would require authentication, network policy, secret management, retention, and a separate privacy review.

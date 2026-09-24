@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 from aiokafka.structs import ConsumerRecord
+from opentelemetry.trace import SpanKind
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,6 +18,12 @@ from durable_agent_runtime.core.config import get_settings
 from durable_agent_runtime.core.logging import configure_logging
 from durable_agent_runtime.db.session import SessionFactory, engine
 from durable_agent_runtime.events import DEAD_LETTER_TOPIC, STEP_READY_TOPIC, StepReadyEvent
+from durable_agent_runtime.observability.context import (
+    extract_traceparent,
+    traceparent_from_headers,
+)
+from durable_agent_runtime.observability.metrics import count
+from durable_agent_runtime.observability.runtime import configure, span
 from durable_agent_runtime.worker.processor import PermanentEventError, process_step_ready
 
 logger = logging.getLogger(__name__)
@@ -43,14 +50,54 @@ async def handle_record(
     sessions: async_sessionmaker[AsyncSession] = SessionFactory,
 ) -> str:
     """Return only after DB commit or acknowledged DLQ publication."""
+    with span(
+        "kafka.consume",
+        {
+            "messaging.system": "kafka",
+            "messaging.destination.name": record.topic,
+            "messaging.kafka.partition": record.partition,
+            "messaging.kafka.offset": record.offset,
+            "messaging.operation.name": "process",
+        },
+        context=extract_traceparent(traceparent_from_headers(record.headers)),
+        kind=SpanKind.CONSUMER,
+    ) as consume_span:
+        result = await _handle_record(
+            record, producer, worker_id=worker_id, consumer_group=consumer_group, sessions=sessions
+        )
+        consume_span.set_attribute("continuum.event.result", result)
+        consume_span.set_attribute("continuum.event.duplicate", result == "duplicate")
+        return result
+
+
+async def _handle_record(
+    record: ConsumerRecord,
+    producer: AIOKafkaProducer,
+    *,
+    worker_id: str,
+    consumer_group: str,
+    sessions: async_sessionmaker[AsyncSession],
+) -> str:
     try:
         event = StepReadyEvent.from_bytes(record.value)
         if record.key != str(event.workflow_id).encode("ascii"):
             raise PermanentEventError("Kafka key does not match workflow_id")
         async with sessions() as session:
-            result = await process_step_ready(
-                session, event, consumer_group=consumer_group, worker_id=worker_id
-            )
+            with span(
+                "inbox.dedupe",
+                {
+                    "continuum.event.id": str(event.event_id),
+                    "continuum.event.type": event.event_type,
+                    "continuum.workflow.id": str(event.workflow_id),
+                    "continuum.step.id": str(event.step_id),
+                },
+            ):
+                result = await process_step_ready(
+                    session, event, consumer_group=consumer_group, worker_id=worker_id
+                )
+        count("continuum_kafka_events_consumed", event_type=event.event_type, result=result)
+        if result == "duplicate":
+            count("continuum_kafka_duplicates")
         logger.info(
             "process_type=worker worker_id=%s operation=%s event_id=%s workflow_id=%s "
             "step_id=%s topic=%s partition=%s offset=%s",
@@ -86,6 +133,7 @@ async def handle_record(
             ),
             timeout=10,
         )
+        count("continuum_dlq_messages", reason="invalid_event")
         logger.warning(
             "process_type=worker worker_id=%s operation=dead_letter topic=%s partition=%s "
             "offset=%s error_type=%s",
@@ -164,6 +212,7 @@ async def consume_loop(
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure("continuum-event-worker", settings)
     worker_id = f"{os.getenv('HOSTNAME', 'worker')}-{uuid4().hex[:8]}"
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from durable_agent_runtime.core.config import get_settings
 from durable_agent_runtime.core.logging import configure_logging
 from durable_agent_runtime.db.session import SessionFactory, engine
+from durable_agent_runtime.observability.runtime import configure
 from durable_agent_runtime.services.execution import ExecutionService
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ async def recovery_loop(
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure("continuum-recovery", settings)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

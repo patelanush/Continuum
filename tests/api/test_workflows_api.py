@@ -75,6 +75,10 @@ async def test_unknown_workflow_returns_consistent_404(client: AsyncClient) -> N
     assert response.json()["error"]["code"] == "not_found"
     attempts = await client.get(f"/api/v1/workflows/{uuid4()}/attempts")
     assert attempts.status_code == 404
+    approval = await client.get(f"/api/v1/approvals/{uuid4()}")
+    assert approval.status_code == 404
+    coding = await client.get(f"/api/v1/workflows/{uuid4()}/coding")
+    assert coding.status_code == 404
 
 
 @pytest.mark.integration

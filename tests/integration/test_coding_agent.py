@@ -8,6 +8,7 @@ from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import func, select
 
 from durable_agent_runtime.coding.fake import fixture_script
@@ -118,7 +119,7 @@ async def wait_for_patch_effect(step_id: UUID) -> tuple[CodingWorkspace, str]:
             await asyncio.sleep(0.1)
 
 
-async def test_fake_coding_agent_requires_approval_and_commits_once() -> None:
+async def test_fake_coding_agent_requires_approval_and_commits_once(client: AsyncClient) -> None:
     workflow_id, step_id = await create_scheduled(
         step_count=1, step_type="coding_agent", step_input=coding_input()
     )
@@ -147,8 +148,19 @@ async def test_fake_coding_agent_requires_approval_and_commits_once() -> None:
             assert "6 passed" in (tests.stdout_excerpt or "")
             workflow = await WorkflowService(session).get_workflow(workflow_id)
             assert workflow.status == WorkflowStatus.RUNNING
-        async with TestSession() as session:
-            await ApprovalService(session).decide(approval.id, ApprovalStatus.APPROVED)
+        listed = await client.get("/api/v1/approvals", params={"status": "PENDING"})
+        assert listed.status_code == 200
+        assert str(approval.id) in {item["id"] for item in listed.json()}
+        fetched = await client.get(f"/api/v1/approvals/{approval.id}")
+        assert fetched.status_code == 200
+        coding_view = await client.get(f"/api/v1/workflows/{workflow_id}/coding")
+        assert coding_view.status_code == 200
+        assert len(coding_view.json()) == 1
+        approved = await client.post(
+            f"/api/v1/approvals/{approval.id}/approve", json={"reason": "fixture reviewed"}
+        )
+        assert approved.status_code == 200
+        assert approved.json()["status"] == "APPROVED"
         assert await asyncio.wait_for(task, timeout=20) == "succeeded"
         async with TestSession() as session:
             workspace = await session.scalar(
@@ -190,7 +202,7 @@ async def test_fake_coding_agent_requires_approval_and_commits_once() -> None:
             await docker("volume", "rm", volume_name)
 
 
-async def test_rejected_approval_is_durable_and_never_commits() -> None:
+async def test_rejected_approval_is_durable_and_never_commits(client: AsyncClient) -> None:
     workflow_id, step_id = await create_scheduled(
         step_count=1, step_type="coding_agent", step_input=coding_input()
     )
@@ -209,12 +221,10 @@ async def test_rejected_approval_is_durable_and_never_commits() -> None:
             )
             assert workspace is not None
             volume_name = workspace.volume_name
-        async with TestSession() as session:
-            rejected = await ApprovalService(session).decide(approval.id, ApprovalStatus.REJECTED)
-            assert rejected.status == ApprovalStatus.REJECTED
-        async with TestSession() as session:
-            repeated = await ApprovalService(session).decide(approval.id, ApprovalStatus.REJECTED)
-            assert repeated.status == ApprovalStatus.REJECTED
+        rejected = await client.post(f"/api/v1/approvals/{approval.id}/reject")
+        assert rejected.status_code == 200 and rejected.json()["status"] == "REJECTED"
+        repeated = await client.post(f"/api/v1/approvals/{approval.id}/reject")
+        assert repeated.status_code == 200 and repeated.json()["status"] == "REJECTED"
         assert await asyncio.wait_for(task, timeout=20) == "failed"
         async with TestSession() as session:
             workspace = await session.scalar(

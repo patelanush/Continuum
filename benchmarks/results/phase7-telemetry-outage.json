@@ -1,0 +1,17 @@
+{
+  "scenario": "telemetry-backend-outage",
+  "fault": "OpenTelemetry Collector stopped during five workflows",
+  "workflows_during_outage": 5,
+  "outage_workflows_succeeded": 5,
+  "outage_attempt_counts": [
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "post_restart_workflow_id": "2cf52e4a-9799-4e59-b5ec-92c0646ae200",
+  "post_restart_attempt_count": 1,
+  "post_restart_trace_id": "afafcf3bdb9077194fe22524fcf201e9",
+  "correctness_impact": "none observed"
+}

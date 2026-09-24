@@ -1,0 +1,10 @@
+{
+  "workflow_id": "7b8ed0ca-c6fa-404d-9e79-37c520aa399d",
+  "trace_id": "4c3fcac688f93c76f0e87b944a4a976",
+  "original_consume_spans": 1,
+  "linked_duplicate_consume_spans": 1,
+  "duplicate_metric_delta": 2,
+  "malformed_trace_header_accepted_as_valid_business_event": true,
+  "execution_attempts": 1,
+  "workflow_status": "SUCCEEDED"
+}

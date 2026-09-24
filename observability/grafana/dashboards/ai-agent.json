@@ -1,0 +1,294 @@
+{
+  "uid": "continuum-ai-agent",
+  "title": "Continuum \u2014 AI Agent",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": [
+    "continuum",
+    "local"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Agent run outcomes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (agent_type, status) (increase(continuum_agent_runs_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Model calls",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (provider, model, status) (rate(continuum_model_calls_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Model latency p50 / p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(continuum_model_call_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(continuum_model_call_duration_seconds_bucket[5m])))",
+          "refId": "B",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Input and output tokens",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (direction) (rate(continuum_model_tokens_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Tool calls",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (tool_name, status) (rate(continuum_tool_calls_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Tool latency p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (tool_name, le) (rate(continuum_tool_call_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Coding patch and tests",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (command_type, status) (increase(continuum_sandbox_commands_total{command_type=~\"apply_patch|run_tests\"}[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Approval decisions",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (decision) (increase(continuum_approvals_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    }
+  ]
+}

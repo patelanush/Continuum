@@ -4,11 +4,15 @@ import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from hashlib import sha256
 from typing import Any, Literal
 from uuid import UUID
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
+
+from durable_agent_runtime.observability.context import current_traceparent
+from durable_agent_runtime.observability.runtime import error, span
 
 
 class RetrySafety(StrEnum):
@@ -130,12 +134,28 @@ async def execute_tool(
                 write=5,
                 pool=5,
             )
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{payments_url.rstrip('/')}/refunds",
-                headers={"Idempotency-Key": context.operation_id},
-                json=request,
-            )
+        with span(
+            "external.http",
+            {
+                "http.request.method": "POST",
+                "continuum.operation.sha256": sha256(context.operation_id.encode()).hexdigest(),
+            },
+        ) as active:
+            headers = {"Idempotency-Key": context.operation_id}
+            traceparent = current_traceparent()
+            if traceparent is not None:
+                headers["traceparent"] = traceparent
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        f"{payments_url.rstrip('/')}/refunds", headers=headers, json=request
+                    )
+            except httpx.RequestError:
+                error(active, "external_service_error")
+                raise
+            active.set_attribute("http.response.status_code", response.status_code)
+            if response.status_code >= 400:
+                error(active, "external_service_error")
         if response.status_code in {408, 429}:
             raise TransientToolError(f"Mock payments returned HTTP {response.status_code}")
         if 400 <= response.status_code < 500:

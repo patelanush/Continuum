@@ -1,0 +1,30 @@
+groups:
+  - name: continuum-local-examples
+    rules:
+      - alert: HighWorkflowFailureRate
+        expr: sum(rate(continuum_workflows_completed_total{status="failed"}[5m])) / clamp_min(sum(rate(continuum_workflows_completed_total[5m])), 0.001) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 10% of completed workflows failed in the last five minutes.
+      - alert: UnpublishedOutboxBacklog
+        expr: continuum_unpublished_outbox_events > 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable outbox has more than 20 unpublished events.
+      - alert: DeadLetterMessagesObserved
+        expr: increase(continuum_dlq_messages_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka worker sent an event to the DLQ.
+      - alert: ExecutorAttemptsStuck
+        expr: continuum_running_execution_attempts > 0 and continuum_active_leases == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Running attempts have no active lease.

@@ -9,6 +9,11 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     log_level: str = "INFO"
+    otel_enabled: bool = False
+    otel_exporter_otlp_endpoint: str = "http://127.0.0.1:4317"
+    otel_traces_sampler: str = "parentbased_always_on"
+    otel_traces_sampler_arg: float = 1.0
+    otel_sqlalchemy_instrumentation: bool = False
     database_url: str = Field(
         default="postgresql+asyncpg://durable:durable@127.0.0.1:55433/durable"
     )

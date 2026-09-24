@@ -1,0 +1,6 @@
+{
+  "scenario": "invalid-event-to-dlq",
+  "dlq_record_matched_payload_hash": true,
+  "prometheus_dlq_metric_delta": 1,
+  "reason": "invalid_event"
+}

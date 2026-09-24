@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Query, status
 
 from durable_agent_runtime.api.dependencies import DatabaseSession
 from durable_agent_runtime.domain.enums import WorkflowStatus
+from durable_agent_runtime.observability.runtime import span
 from durable_agent_runtime.schemas.agents import AgentRunTrace
 from durable_agent_runtime.schemas.workflows import (
     AttemptResponse,
@@ -21,7 +22,10 @@ router = APIRouter(prefix="/api/v1/workflows", tags=["workflows"])
 
 @router.post("", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
 async def create_workflow(command: WorkflowCreate, session: DatabaseSession) -> object:
-    return await WorkflowService(session).create_workflow(command)
+    with span("workflow.create", {"continuum.workflow.type": command.workflow_type}) as active:
+        workflow = await WorkflowService(session).create_workflow(command)
+        active.set_attribute("continuum.workflow.id", str(workflow.id))
+        return workflow
 
 
 @router.get("", response_model=WorkflowListResponse)
@@ -44,7 +48,8 @@ async def get_workflow(workflow_id: UUID, session: DatabaseSession) -> object:
 
 @router.post("/{workflow_id}/start", response_model=WorkflowResponse)
 async def start_workflow(workflow_id: UUID, session: DatabaseSession) -> object:
-    return await WorkflowService(session).start_workflow(workflow_id)
+    with span("api.workflow.start", {"continuum.workflow.id": str(workflow_id)}):
+        return await WorkflowService(session).start_workflow(workflow_id)
 
 
 @router.post("/{workflow_id}/cancel", response_model=WorkflowResponse)
@@ -53,9 +58,10 @@ async def cancel_workflow(
     session: DatabaseSession,
     command: Annotated[CancelRequest | None, Body()] = None,
 ) -> object:
-    return await WorkflowService(session).cancel_workflow(
-        workflow_id, reason=command.reason if command else None
-    )
+    with span("workflow.cancel", {"continuum.workflow.id": str(workflow_id)}):
+        return await WorkflowService(session).cancel_workflow(
+            workflow_id, reason=command.reason if command else None
+        )
 
 
 @router.get("/{workflow_id}/history", response_model=list[TransitionResponse])

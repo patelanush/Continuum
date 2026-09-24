@@ -49,6 +49,8 @@ from durable_agent_runtime.domain.state_machine import (
     validate_workspace_transition,
 )
 from durable_agent_runtime.events import STEP_READY_TOPIC
+from durable_agent_runtime.observability.context import current_traceparent
+from durable_agent_runtime.observability.metrics import count
 from durable_agent_runtime.schemas.agents import (
     AgentRunTrace,
     AgentToolSummary,
@@ -141,6 +143,7 @@ class WorkflowService:
             workflow.current_step_position = 0
             self._transition_step(first, StepStatus.READY)
         logger.info("workflow_started workflow_id=%s", workflow_id)
+        count("continuum_workflows_started", workflow_type=workflow.workflow_type)
         return workflow
 
     async def mark_step_running(self, step_id: UUID) -> Workflow:
@@ -550,6 +553,7 @@ class WorkflowService:
                     step_id=step.id,
                     correlation_id=step.workflow_id,
                     causation_id=causation_id,
+                    traceparent=current_traceparent(),
                     payload={},
                     topic=STEP_READY_TOPIC,
                     message_key=str(step.workflow_id),

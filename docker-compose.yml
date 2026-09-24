@@ -45,6 +45,11 @@ services:
     command: ["uvicorn", "durable_agent_runtime.mock_payments.app:app", "--host", "0.0.0.0", "--port", "8001"]
     environment:
       APP_ENV: ${APP_ENV:-development}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      OTEL_SQLALCHEMY_INSTRUMENTATION: ${OTEL_SQLALCHEMY_INSTRUMENTATION:-false}
       PAYMENTS_DATABASE_URL: postgresql://payments:payments@payments-postgres:5432/payments
     ports:
       - "${DEV_BIND_HOST:-127.0.0.1}:${MOCK_PAYMENTS_PORT:-8001}:8001"
@@ -61,6 +66,11 @@ services:
     build: .
     environment:
       APP_ENV: ${APP_ENV:-development}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      OTEL_SQLALCHEMY_INSTRUMENTATION: ${OTEL_SQLALCHEMY_INSTRUMENTATION:-false}
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
     ports:
@@ -116,6 +126,11 @@ services:
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      OTEL_SQLALCHEMY_INSTRUMENTATION: ${OTEL_SQLALCHEMY_INSTRUMENTATION:-false}
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -136,6 +151,11 @@ services:
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      OTEL_SQLALCHEMY_INSTRUMENTATION: ${OTEL_SQLALCHEMY_INSTRUMENTATION:-false}
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -156,6 +176,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       APP_ENV: ${APP_ENV:-development}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      OTEL_SQLALCHEMY_INSTRUMENTATION: ${OTEL_SQLALCHEMY_INSTRUMENTATION:-false}
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
       MOCK_PAYMENTS_URL: http://mock-payments:8001
@@ -190,6 +215,11 @@ services:
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
+      OTEL_SQLALCHEMY_INSTRUMENTATION: ${OTEL_SQLALCHEMY_INSTRUMENTATION:-false}
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://durable:durable@postgres:5432/durable
       RECOVERY_SCAN_INTERVAL_SECONDS: ${RECOVERY_SCAN_INTERVAL_SECONDS:-1}
@@ -197,7 +227,97 @@ services:
       api:
         condition: service_healthy
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.140.0
+    build:
+      context: .
+      dockerfile: observability/Dockerfile.probed
+      args:
+        BASE_IMAGE: otel/opentelemetry-collector-contrib:0.140.0
+    profiles: [observability]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./observability/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "${DEV_BIND_HOST:-127.0.0.1}:${OTLP_PORT:-4317}:4317"
+    depends_on:
+      tempo:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-qO-", "http://127.0.0.1:13133/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  tempo:
+    image: grafana/tempo:2.10.8
+    build:
+      context: .
+      dockerfile: observability/Dockerfile.probed
+      args:
+        BASE_IMAGE: grafana/tempo:2.10.8
+    profiles: [observability]
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "${DEV_BIND_HOST:-127.0.0.1}:${TEMPO_PORT:-3200}:3200"
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-qO-", "http://127.0.0.1:3200/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  prometheus:
+    image: prom/prometheus:v3.13.3
+    profiles: [observability]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.retention.time=24h
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./observability/alerts.yaml:/etc/prometheus/alerts.yaml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${DEV_BIND_HOST:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  grafana:
+    image: grafana/grafana:13.1.6
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: continuum-local
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${DEV_BIND_HOST:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 volumes:
   postgres_data:
   kafka_data:
   payments_data:
+  tempo_data:
+  prometheus_data:
+  grafana_data:

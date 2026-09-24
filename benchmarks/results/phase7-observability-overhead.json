@@ -1,0 +1,71 @@
+{
+  "workload": "single-step noop workflow through API, outbox, Kafka, worker, executor",
+  "total_workflows": 600,
+  "concurrency": 20,
+  "order": [
+    "off",
+    "on",
+    "off",
+    "on"
+  ],
+  "runs": [
+    {
+      "mode": "off",
+      "ordinal": 1,
+      "workflows": 150,
+      "concurrency": 20,
+      "median_seconds": 3.6044,
+      "p95_seconds": 4.9896,
+      "throughput_per_second": 4.922,
+      "wall_seconds": 30.4751
+    },
+    {
+      "mode": "on",
+      "ordinal": 2,
+      "workflows": 150,
+      "concurrency": 20,
+      "median_seconds": 3.5363,
+      "p95_seconds": 4.8097,
+      "throughput_per_second": 5.0649,
+      "wall_seconds": 29.6155
+    },
+    {
+      "mode": "off",
+      "ordinal": 3,
+      "workflows": 150,
+      "concurrency": 20,
+      "median_seconds": 3.5206,
+      "p95_seconds": 4.5298,
+      "throughput_per_second": 5.1743,
+      "wall_seconds": 28.9893
+    },
+    {
+      "mode": "on",
+      "ordinal": 4,
+      "workflows": 150,
+      "concurrency": 20,
+      "median_seconds": 3.6155,
+      "p95_seconds": 4.6378,
+      "throughput_per_second": 5.1209,
+      "wall_seconds": 29.2915
+    }
+  ],
+  "mean_of_run_summaries": {
+    "off": {
+      "median_seconds": 3.5625,
+      "p95_seconds": 4.7597,
+      "throughput_per_second": 5.0481
+    },
+    "on": {
+      "median_seconds": 3.5759,
+      "p95_seconds": 4.7238,
+      "throughput_per_second": 5.0929
+    }
+  },
+  "relative_impact": {
+    "median_latency_percent": 0.38,
+    "p95_latency_percent": -0.75,
+    "throughput_percent": 0.89
+  },
+  "environment": "local Docker Compose, 3 workers, 3 executors, same images and database"
+}

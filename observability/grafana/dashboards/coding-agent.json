@@ -1,0 +1,289 @@
+{
+  "uid": "continuum-coding-agent",
+  "title": "Continuum \u2014 Coding Agent",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": [
+    "continuum",
+    "local"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Sandbox startup p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(continuum_sandbox_startup_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Sandbox command outcomes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (command_type, status) (increase(continuum_sandbox_commands_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Test duration p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(continuum_test_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Test success and failure",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(continuum_sandbox_commands_total{command_type=\"run_tests\"}[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Workspace reconciliation",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (result) (increase(continuum_workspace_reconciliations_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Commit outcomes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(continuum_git_commits_total[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Pending approvals",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "continuum_pending_approvals",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Coding workflow completion",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(continuum_steps_completed_total{step_type=\"coding_agent\"}[1h]))",
+          "refId": "A",
+          "legendFormat": "{{status}} {{step_type}} {{provider}} {{model}} {{tool_name}} {{reason}}"
+        }
+      ]
+    }
+  ]
+}
