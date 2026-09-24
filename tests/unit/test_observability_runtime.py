@@ -13,9 +13,12 @@ from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 
+import durable_agent_runtime.observability.gauges as gauges
+import durable_agent_runtime.observability.metrics as metrics
+import durable_agent_runtime.observability.operations as operations
+import durable_agent_runtime.observability.runtime as runtime
 from durable_agent_runtime.core.config import Settings
 from durable_agent_runtime.core.logging import TraceCorrelationFilter, configure_logging
-from durable_agent_runtime.observability import gauges, metrics, operations, runtime
 from durable_agent_runtime.observability.privacy import safe_trace_attributes
 
 

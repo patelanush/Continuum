@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from durable_agent_runtime.dispatcher import main as dispatcher
+import durable_agent_runtime.dispatcher.main as dispatcher
 
 
 async def test_dispatch_loop_paces_nonempty_batches(monkeypatch: pytest.MonkeyPatch) -> None:

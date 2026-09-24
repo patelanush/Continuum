@@ -11,5 +11,6 @@ htmlcov/
 dist/
 build/
 artifacts/faultlab/
+artifacts/benchmarks/
 *.egg-info/
 .DS_Store

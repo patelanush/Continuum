@@ -10,8 +10,8 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 from aiokafka.structs import ConsumerRecord
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import durable_agent_runtime.worker.main as worker
 from durable_agent_runtime.events import STEP_READY_TOPIC, StepReadyEvent
-from durable_agent_runtime.worker import main as worker
 
 
 class FakeProducer:

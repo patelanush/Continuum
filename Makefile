@@ -1,4 +1,4 @@
-.PHONY: up down reset migrate migration test test-unit test-integration test-kafka test-execution test-recovery test-payments test-agent test-coding lint format format-check typecheck check logs scale-workers scale-executors faultlab-up faultlab-smoke faultlab-ai-smoke faultlab-coding-smoke faultlab-reliability faultlab-side-effects faultlab-clean agent-demo-fake agent-demo-ollama coding-demo-fake coding-demo-ollama observability-up observability-down observability-logs observability-check trace-demo metrics-demo recovery-trace-demo
+.PHONY: up down reset migrate migration test test-unit test-integration test-kafka test-execution test-recovery test-payments test-agent test-coding lint format format-check typecheck check logs scale-workers scale-executors faultlab-up faultlab-smoke faultlab-ai-smoke faultlab-coding-smoke faultlab-reliability faultlab-side-effects faultlab-clean agent-demo-fake agent-demo-ollama coding-demo-fake coding-demo-ollama observability-up observability-down observability-logs observability-check trace-demo metrics-demo recovery-trace-demo demo benchmark-prepare benchmark-scaling benchmark-mixed benchmark-load-failure benchmark-clean
 
 DATABASE_URL ?= postgresql+asyncpg://durable:durable@127.0.0.1:55433/durable
 TEST_DATABASE_URL ?= postgresql+asyncpg://durable:durable@127.0.0.1:55433/durable_test
@@ -28,6 +28,24 @@ metrics-demo:
 
 recovery-trace-demo:
 	uv run python scripts/phase7_recovery_demo.py
+
+demo:
+	uv run python scripts/phase8_demo.py
+
+benchmark-prepare:
+	uv run python scripts/phase8_benchmark.py prepare --executors 1 --workers 3
+
+benchmark-scaling:
+	uv run python scripts/phase8_benchmark.py scaling --executors $(or $(EXECUTORS),3) --workers $(or $(WORKERS),3) --workflows $(or $(WORKFLOWS),120) --concurrency $(or $(CONCURRENCY),25) --repetitions $(or $(REPETITIONS),3)
+
+benchmark-mixed:
+	uv run python scripts/phase8_benchmark.py mixed --executors $(or $(EXECUTORS),3) --workers $(or $(WORKERS),3) --workflows $(or $(WORKFLOWS),100) --concurrency $(or $(CONCURRENCY),20)
+
+benchmark-load-failure:
+	uv run python scripts/phase8_benchmark.py failure-load --executors $(or $(EXECUTORS),3) --workers $(or $(WORKERS),3) --workflows $(or $(WORKFLOWS),300) --concurrency $(or $(CONCURRENCY),30) --fault $(or $(FAULT),executor)
+
+benchmark-clean:
+	uv run python scripts/phase8_benchmark.py clean
 
 scale-workers:
 	docker compose up --build -d --scale worker=3
