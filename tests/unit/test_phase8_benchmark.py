@@ -1,15 +1,21 @@
 """Benchmark arithmetic, configuration, and report contract."""
 
 import json
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
+import httpx
 import pytest
 from phase8_benchmark import (
     BenchSettings,
+    approve_pending,
     report_markdown,
     specification,
     workload_kinds,
 )
 from phase8_stats import aggregate_runs, distribution, percentile, saturation_point, scaling
+
+from durable_agent_runtime.domain.enums import ApprovalStatus
 
 
 def test_configuration_and_deterministic_mix() -> None:
@@ -72,3 +78,17 @@ def test_aggregate_and_report_are_serializable() -> None:
     }
     assert "Claim p95" in report_markdown(summary)
     assert json.loads(json.dumps(summary))["aggregate"]["total_workflows"] == 20
+
+
+@pytest.mark.asyncio
+async def test_approval_response_loss_uses_durable_decision() -> None:
+    approval_id = uuid4()
+    session = MagicMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [approval_id]
+    session.execute = AsyncMock(return_value=result)
+    session.scalar = AsyncMock(return_value=ApprovalStatus.APPROVED)
+    client = MagicMock()
+    client.post = AsyncMock(side_effect=httpx.RemoteProtocolError("response lost"))
+    assert await approve_pending(session, client, [uuid4()]) == 1
+    client.post.assert_awaited_once()

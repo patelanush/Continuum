@@ -46,6 +46,7 @@ from durable_agent_runtime.db.models import (
     WorkflowStep,
     WorkspaceCheckpoint,
 )
+from durable_agent_runtime.domain.enums import ApprovalStatus
 
 PROJECT = "continuum-bench"
 ROOT = Path(__file__).resolve().parents[1]
@@ -335,8 +336,24 @@ async def approve_pending(session: AsyncSession, client: httpx.AsyncClient, ids:
         .all()
     )
     for approval_id in rows:
-        response = await client.post(f"/api/v1/approvals/{approval_id}/approve")
-        response.raise_for_status()
+        for retry in range(3):
+            try:
+                response = await client.post(f"/api/v1/approvals/{approval_id}/approve")
+                if response.is_success:
+                    break
+                if response.status_code != 409:
+                    response.raise_for_status()
+            except httpx.TransportError:
+                if retry == 2:
+                    raise
+            status = await session.scalar(
+                select(ApprovalRequest.status).where(ApprovalRequest.id == approval_id)
+            )
+            if status == ApprovalStatus.APPROVED:
+                break
+            if retry == 2:
+                raise RuntimeError(f"approval {approval_id} did not complete after retries")
+            await asyncio.sleep(0.2)
     return len(rows)
 
 
@@ -829,6 +846,15 @@ async def run_batch(
                 approvals=benchmark_type == "mixed",
             )
             wall = monotonic() - began
+            completed_at = now()
+            utc_wall = (
+                datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)
+            ).total_seconds()
+            if abs(utc_wall - wall) > max(5.0, wall * 0.05):
+                raise RuntimeError(
+                    "host clock/suspend gap invalidated benchmark timing: "
+                    f"UTC={utc_wall:.1f}s monotonic={wall:.1f}s"
+                )
             _, dlq_after = await dlq_offsets(settings.kafka_bootstrap)
             result = await durable_result(
                 sessions, items, payments, dlq_delta=dlq_after - dlq_before
@@ -838,9 +864,10 @@ async def run_batch(
                 "benchmark_type": benchmark_type,
                 "experiment_id": experiment_id,
                 "started_at": started_at,
-                "completed_at": now(),
+                "completed_at": completed_at,
                 "client_concurrency": concurrency,
                 "wall_clock_duration_seconds": wall,
+                "utc_wall_seconds": utc_wall,
                 "workflow_throughput_per_second": throughput(result["successful_workflows"], wall),
                 "step_throughput_per_second": throughput(result["total_steps"], wall),
                 "approval_api_decisions": approvals,
