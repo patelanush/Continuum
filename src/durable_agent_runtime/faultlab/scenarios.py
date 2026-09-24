@@ -17,7 +17,7 @@ from durable_agent_runtime.faultlab.assertions import classify_workflow
 from durable_agent_runtime.faultlab.models import TrialResult
 from durable_agent_runtime.faultlab.runtime import FaultLabRuntime, wait_for
 from durable_agent_runtime.services.execution import ExecutionService, LostLease
-from durable_agent_runtime.worker.main import handle_record
+from durable_agent_runtime.worker.main import DeadLetterRecord, handle_record
 
 
 @dataclass(frozen=True)
@@ -611,8 +611,12 @@ async def malformed_kafka_event(runtime: FaultLabRuntime, trial: TrialResult) ->
             return True if observer.assignment() else None
 
         await wait_for(assigned)
+        # Assignment can precede the latest-offset reset. Resolve the position
+        # before publishing so this observer cannot skip the injected record.
+        for partition in observer.assignment():
+            await observer.position(partition)
         inject(trial, "MALFORMED_JSON", "invalid event envelope on step-ready topic")
-        await runtime.producer.send_and_wait(
+        injected = await runtime.producer.send_and_wait(
             STEP_READY_TOPIC, key=str(trial.trial_id).encode("ascii"), value=b"{not-json"
         )
 
@@ -621,7 +625,15 @@ async def malformed_kafka_event(runtime: FaultLabRuntime, trial: TrialResult) ->
                 record = await asyncio.wait_for(observer.getone(), timeout=1)
             except TimeoutError:
                 return None
-            return record if b"ValidationError" in record.value else None
+            dead = DeadLetterRecord.model_validate_json(record.value)
+            return (
+                record
+                if dead.original_topic == STEP_READY_TOPIC
+                and dead.partition == injected.partition
+                and dead.offset == injected.offset
+                and dead.error_type == "ValidationError"
+                else None
+            )
 
         dead = await wait_for(dlq)
         trial.notes["dlq_offset"] = dead.offset
