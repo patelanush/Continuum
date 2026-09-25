@@ -1,4 +1,4 @@
-# Design Decisions through Phase 4
+# Design Decisions
 
 ## PostgreSQL is the source of truth
 
@@ -424,3 +424,17 @@ Python replacement text is parsed before the model decision is accepted and agai
 **Reason:** Telemetry outages and backpressure must not become workflow outages or lock regressions. A real Collector stop test completed five workflows and a post-restart workflow produced a new Tempo trace.
 
 **Tradeoff:** Telemetry can be lost during an outage, and counters can miss an event if a process dies just after its durable commit. PostgreSQL and external effect state remain the audit authority. Local 100% sampling is a development default only.
+
+## Final local scaling boundary
+
+**Decision:** Keep Docker Compose as the local horizontal scaling and benchmark environment; do not add Kubernetes or another broker/database solely for a portfolio keyword.
+
+**Reason:** The [controlled benchmark](PERFORMANCE.md) already measures the relevant API, outbox, Kafka, worker, and executor path at 1, 3, 5, 8, 12, and 16 executors. At 12 executors on the measured eight-core machine, throughput peaked at 22.174 workflows/s for repeated 500-workflow batches. Sixteen executors reduced throughput and caused ten recovered lease expirations under resource pressure. The next engineering issue is capacity and queueing, not orchestration syntax.
+
+**Tradeoff:** Compose is not a production orchestrator or a Kafka high-availability test bed. A production deployment would require its own failure-domain, security, lease-sizing, and capacity review. The benchmark does not imply universal replica limits.
+
+**Decision:** Leave Kafka's three step-ready partitions unchanged after comparing one and three event workers at 12 executors.
+
+**Reason:** One worker averaged 22.963 workflows/s and three workers 22.174/s across three repeated 500-workflow runs, a difference within local variability. There is no evidence that three partitions cap this workload. Outbox/queue delay and host scheduling became more significant at high executor counts.
+
+**Tradeoff:** A workload with larger event payloads or different consumer work may need a different partition/worker study. Do not claim measured consumer lag where the instrumentation does not provide it.

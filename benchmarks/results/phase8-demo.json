@@ -1,0 +1,15 @@
+{
+  "benchmark_code_commit": "dde3460f1a5cbb49b92593b1c1dcf25aead91695",
+  "workflow_id": "154e12b1-e546-41f2-86a0-b71fc5584959",
+  "workflow_status": "SUCCEEDED",
+  "provider": "fake",
+  "injected_fault": "executor SIGKILL after patch application",
+  "attempt_statuses": ["EXPIRED", "SUCCEEDED"],
+  "patch_reconciled": true,
+  "tests_passed": 6,
+  "approval": "APPROVED",
+  "commit_sha": "96805b0cfda3fdf9857baaeb8e9273f4e34f851e",
+  "duplicate_patches": 0,
+  "duplicate_commits": 0,
+  "tempo_trace_id": "ae829b86e672b7ee9d8457a84f5d7018"
+}

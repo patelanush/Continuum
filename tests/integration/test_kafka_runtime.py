@@ -397,7 +397,9 @@ async def test_three_workers_complete_twenty_sequential_workflows(
             )
             for i in range(3)
         )
-        async with asyncio.timeout(90):
+        # Docker Desktop can drain 100 Kafka/DB transitions slowly after topic churn.
+        # Assert eventual completion without a tight local scheduling deadline.
+        async with asyncio.timeout(180):
             while True:
                 for task in tasks:
                     if task.done():

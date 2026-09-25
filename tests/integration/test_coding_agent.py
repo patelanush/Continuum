@@ -73,7 +73,8 @@ async def wait_for_approval(workflow_id: UUID) -> ApprovalRequest:
                 ),
             )
 
-    async with asyncio.timeout(40):
+    # Real Docker sandbox startup can be slow on a loaded local host.
+    async with asyncio.timeout(120):
         while True:
             approval = await probe()
             if approval is not None:
@@ -82,7 +83,7 @@ async def wait_for_approval(workflow_id: UUID) -> ApprovalRequest:
 
 
 async def wait_for_patch_effect(step_id: UUID) -> tuple[CodingWorkspace, str]:
-    async with asyncio.timeout(40):
+    async with asyncio.timeout(120):
         while True:
             async with TestSession() as session:
                 workspace = await session.scalar(

@@ -1,4 +1,4 @@
-# Failure Model through Phase 6
+# Failure Model
 
 Continuum uses PostgreSQL-authoritative state, Kafka at-least-once transport, a transactional outbox, an idempotent inbox, and durable leased execution attempts. It does **not** promise exactly-once distributed or arbitrary external execution.
 
@@ -88,3 +88,11 @@ The final clean-revision [FaultLab campaign](../benchmarks/results/phase4-summar
 - **Privacy regression:** The central exporter allowlist strips unknown attributes, events, and status text. A sentinel unit test and a real Tempo coding trace check for prompt/source/API-key sentinels.
 
 The Phase 7 trace and overhead artifacts are separate from the official Phase 4 FaultLab campaign. The telemetry stack is local and optional; it adds no Kubernetes or broker availability guarantee.
+
+## Saturation and failure during load
+
+The [final load test](../benchmarks/results/phase8-load-failure.md) killed an executor owning a running attempt while 297 of 300 measured workflows were active. One attempt expired, a replacement succeeded, all 300 workflows finished, and 150 expected refunds were found once each in the independent payments service. The replacement was claimed 258.95 seconds after expiry because it waited behind the existing pending queue. This is correct recovery with poor recovery latency under backlog; a lease expiry alone does not guarantee immediate retry.
+
+At 16 executors on the eight-core local host, three 500-workflow runs remained correct but ten attempts expired incidentally in two runs. Throughput and outbox delay varied sharply. The five-second benchmark lease exposed host scheduling pressure. Operators should treat rising outbox depth, attempt claim wait, and lease expirations as a saturation signal and size lease/heartbeat intervals for their deployment. This test does not establish a production capacity threshold.
+
+A separate event-worker SIGKILL under active submissions finished 120/120 workflows and 60 expected refunds without duplicates. Published and consumed event counts were equal at the sampled kill instant, so this run does not prove redelivery occurred. The dedicated Kafka duplicate and lost-offset tests establish that replay safety boundary.

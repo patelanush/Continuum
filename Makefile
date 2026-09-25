@@ -33,7 +33,7 @@ demo:
 	uv run python scripts/phase8_demo.py
 
 benchmark-prepare:
-	uv run python scripts/phase8_benchmark.py prepare --executors 1 --workers 3
+	uv run python scripts/phase8_benchmark.py prepare --executors $(or $(EXECUTORS),1) --workers $(or $(WORKERS),3)
 
 benchmark-scaling:
 	uv run python scripts/phase8_benchmark.py scaling --executors $(or $(EXECUTORS),3) --workers $(or $(WORKERS),3) --workflows $(or $(WORKFLOWS),120) --concurrency $(or $(CONCURRENCY),25) --repetitions $(or $(REPETITIONS),3)

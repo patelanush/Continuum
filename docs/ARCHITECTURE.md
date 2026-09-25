@@ -1,4 +1,6 @@
-# Architecture through Phase 6
+# Architecture
+
+The [README](../README.md#architecture) contains the canonical system diagram. This document explains the transaction and recovery boundaries in more detail. The measured local scaling and saturation behavior is in [Performance](PERFORMANCE.md).
 
 ## Authority and layers
 

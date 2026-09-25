@@ -1,0 +1,21 @@
+{
+  "command": "make check",
+  "result": "passed",
+  "tests_passed": 273,
+  "tests_deselected": 1,
+  "coverage_percent": 87.78,
+  "ruff_format": "passed",
+  "ruff_check": "passed",
+  "strict_mypy": "passed",
+  "migration_upgrade": "passed",
+  "faultlab_smoke": {
+    "command": "make faultlab-smoke",
+    "experiment_id": "972aa1ca-ad59-4843-b164-eb34cb804a24",
+    "correct_trials": 16,
+    "total_trials": 16,
+    "recovered_trials": 13,
+    "duplicate_side_effects": 0,
+    "lost_side_effects": 0
+  },
+  "note": "Final local quality gate after Phase 8 implementation and documentation; test output recorded during this run."
+}

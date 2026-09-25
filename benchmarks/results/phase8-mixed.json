@@ -1,0 +1,43 @@
+{
+  "agent_runs": 40,
+  "agent_turns": 180,
+  "approval_decisions": 15,
+  "client_concurrency": 20,
+  "coding_workflows": 15,
+  "duplicate_side_effects": 0,
+  "duplicate_transitions": 0,
+  "event_workers": 3,
+  "executors": 5,
+  "experiment_id": "9c47c658-3fc7-4c44-867b-dac0b8f66455",
+  "failed_workflows": 0,
+  "git_commit": "dde3460f1a5cbb49b92593b1c1dcf25aead91695",
+  "lost_side_effects": 0,
+  "model_calls": 180,
+  "queue_drained": true,
+  "recoveries": 0,
+  "refund_operations_verified": 45,
+  "sandbox_commands": 105,
+  "successful_workflows": 100,
+  "telemetry": "off",
+  "test_executions": 15,
+  "throughput_per_second": 1.258968209540872,
+  "tool_calls": 140,
+  "total_steps": 140,
+  "unexpected_dlq_delta": 0,
+  "verification": "refund counts queried from independent payments service; each coding workspace checked for one patch checkpoint, passing test record, one successful commit record, and one actual Git commit",
+  "wall_seconds": 79.43012320896378,
+  "warmup_workflows": 20,
+  "workflow_latency_ms": {
+    "median": 50723.31999999999,
+    "p95": 72396.45654999999,
+    "p99": 72715.42906000001,
+    "samples": 100
+  },
+  "workflow_type_distribution": {
+    "coding": 15,
+    "normal": 40,
+    "refund": 20,
+    "support": 25
+  },
+  "workflows": 100
+}
